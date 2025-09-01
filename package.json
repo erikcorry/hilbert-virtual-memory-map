@@ -1,15 +1,19 @@
 {
   "name": "memory-map",
   "version": "1.0.0",
+  "description": "Generate visual memory maps using Hilbert curves for 47-bit virtual address spaces",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": ["memory", "visualization", "hilbert-curve", "address-space", "mapping"],
+  "author": "Cloudflare, Inc.",
+  "license": "MIT",
   "dependencies": {
     "canvas": "^3.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "."
   }
 }
