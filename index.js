@@ -162,10 +162,55 @@ class HilbertMemoryMap {
     // Apply the image data to canvas
     ctx.putImageData(imageData, 0, 0);
     
+    // Draw grid lines for terabyte boundaries
+    this.drawGridLines(ctx);
+    
     // Draw scale key in the right border
     this.drawScaleKey(ctx);
     
     return canvas;
+  }
+
+  drawGridLines(ctx) {
+    // Set up dotted line style
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; // Brighter white
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 4]); // Dotted pattern
+    
+    // 1TB = 16384 pixels = 128x128 square in Hilbert space
+    const tbSize = 128; // sqrt(16384) = 128
+    
+    // Draw grid lines every 128 pixels in both directions for each 1024x1024 square
+    ctx.beginPath();
+    
+    // Grid lines for top square
+    for (let i = tbSize; i < 1024; i += tbSize) {
+      // Vertical lines
+      ctx.moveTo(this.borderLeft + i, this.borderTop);
+      ctx.lineTo(this.borderLeft + i, this.borderTop + 1024);
+      // Horizontal lines
+      ctx.moveTo(this.borderLeft, this.borderTop + i);
+      ctx.lineTo(this.borderLeft + 1024, this.borderTop + i);
+    }
+    
+    // Grid lines for bottom square
+    for (let i = tbSize; i < 1024; i += tbSize) {
+      // Vertical lines
+      ctx.moveTo(this.borderLeft + i, this.borderTop + 1024);
+      ctx.lineTo(this.borderLeft + i, this.borderTop + 2048);
+      // Horizontal lines
+      ctx.moveTo(this.borderLeft, this.borderTop + 1024 + i);
+      ctx.lineTo(this.borderLeft + 1024, this.borderTop + 1024 + i);
+    }
+    
+    // Draw the middle horizontal line separating the two 1024x1024 squares
+    ctx.moveTo(this.borderLeft, this.borderTop + 1024);
+    ctx.lineTo(this.borderLeft + 1024, this.borderTop + 1024);
+    
+    ctx.stroke();
+    
+    // Reset line dash for other drawing
+    ctx.setLineDash([]);
   }
 
   drawScaleKey(ctx) {
@@ -200,8 +245,8 @@ class HilbertMemoryMap {
     
     // Additional info
     ctx.font = '12px Arial';
-    ctx.fillText(`Each pixel = 64 MiB`, keyX, keyY + 200);
-    ctx.fillText(`Total space = 128 TiB`, keyX, keyY + 220);
+    ctx.fillText(`Each pixel = 64 MiB`, keyX, keyY + 250);
+    ctx.fillText(`Total space = 128 TiB`, keyX, keyY + 270);
   }
 
   async generateMemoryMap(inputFile, outputFile) {
