@@ -214,10 +214,10 @@ class HilbertMemoryMap {
     ctx.lineWidth = 1;
     ctx.setLineDash([2, 4]); // Dotted pattern
 
-    // 1TB = 4096 pixels = 64x64 square in Hilbert space (1TB / 256MB = 4096)
-    const tbSize = 64; // sqrt(4096) = 64
+    // 4TB = 16384 pixels = 128x128 square in Hilbert space (4TB / 256MB = 16384)
+    const tbSize = 128; // sqrt(16384) = 128
 
-    // Draw grid lines every 64 pixels in both directions
+    // Draw grid lines every 128 pixels in both directions  
     ctx.beginPath();
 
     for (let i = tbSize; i < 1024; i += tbSize) {
@@ -471,7 +471,21 @@ class HilbertMemoryMap {
                 const region = findRegionAtPixel(x, y);
                 
                 if (region) {
-                    tooltip.innerHTML = \`<span class="tooltip-close" onclick="hideTooltip()">&times;</span>\${region.name}<br>0x\${region.start.toString(16)} - 0x\${region.end.toString(16)}\`;
+                    const size = region.end - region.start;
+                    let sizeStr;
+                    if (size >= 1024 * 1024 * 1024 * 1024) {
+                        sizeStr = (size / (1024 * 1024 * 1024 * 1024)).toFixed(1) + ' TiB';
+                    } else if (size >= 1024 * 1024 * 1024) {
+                        sizeStr = (size / (1024 * 1024 * 1024)).toFixed(1) + ' GiB';
+                    } else if (size >= 1024 * 1024) {
+                        sizeStr = (size / (1024 * 1024)).toFixed(1) + ' MiB';
+                    } else if (size >= 1024) {
+                        sizeStr = (size / 1024).toFixed(1) + ' KiB';
+                    } else {
+                        sizeStr = size + ' bytes';
+                    }
+                    
+                    tooltip.innerHTML = \`<span class="tooltip-close" onclick="hideTooltip()">&times;</span>\${region.name}<br>0x\${region.start.toString(16)} - 0x\${region.end.toString(16)}<br>Size: \${sizeStr}\`;
                     tooltip.style.display = 'block';
                     tooltip.style.left = e.clientX + 'px';
                     tooltip.style.top = e.clientY + 'px';
