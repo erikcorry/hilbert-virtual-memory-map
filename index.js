@@ -148,7 +148,7 @@ class HilbertMemoryMap {
     return memoryRanges.sort((a, b) => a.start - b.start);
   }
 
-  drawMemoryMap(memoryRanges) {
+  drawMemoryMap(memoryRanges, level, minAddr, maxAddr) {
     const canvas = createCanvas(this.width, this.height);
     const ctx = canvas.getContext('2d');
 
@@ -165,22 +165,29 @@ class HilbertMemoryMap {
       return canvas;
     }
 
-    console.log(`Drawing ${memoryRanges.length} memory ranges...`);
+    const addressRange = maxAddr - minAddr;
+    const bytesPerPixel = addressRange / this.totalPixels;
+    
+    // Filter ranges to only those that overlap with current view
+    const visibleRanges = memoryRanges.filter(range => 
+      range.end > minAddr && range.start < maxAddr
+    );
+    
+    console.log(`Drawing ${visibleRanges.length}/${memoryRanges.length} visible ranges...`);
 
     // Create image data for the entire canvas
     const imageData = ctx.getImageData(0, 0, this.width, this.height);
     const data = imageData.data;
 
-    // Process each memory range
-    memoryRanges.forEach((range, rangeIndex) => {
+    // Process each visible memory range
+    visibleRanges.forEach((range, rangeIndex) => {
       const { r, g, b, a } = range.color;
 
-      // Calculate pixel range for this memory range
-      const startPixelIndex = this.addressToPixelIndex(range.start);
-      const endPixelIndex = this.addressToPixelIndex(range.end);
-      const pixelCount = Math.max(1, endPixelIndex - startPixelIndex);
-
-      console.log(`Range ${rangeIndex + 1}/${memoryRanges.length}: 0x${range.start.toString(16)}-0x${range.end.toString(16)} (${pixelCount} pixels)`);
+      // Calculate pixel range for this memory range in current view
+      const startAddr = Math.max(range.start, minAddr);
+      const endAddr = Math.min(range.end, maxAddr);
+      const startPixelIndex = Math.floor((startAddr - minAddr) / bytesPerPixel);
+      const endPixelIndex = Math.floor((endAddr - minAddr) / bytesPerPixel);
 
       // Fill pixels for this memory range
       for (let pixelIndex = startPixelIndex; pixelIndex < endPixelIndex && pixelIndex < this.totalPixels; pixelIndex++) {
@@ -199,16 +206,16 @@ class HilbertMemoryMap {
     // Apply the image data to canvas
     ctx.putImageData(imageData, 0, 0);
 
-    // Draw grid lines for terabyte boundaries
-    this.drawGridLines(ctx);
+    // Draw grid lines 
+    this.drawGridLines(ctx, level);
 
-    // Draw scale key in the right border
-    this.drawScaleKey(ctx);
+    // Draw scale key 
+    this.drawScaleKey(ctx, level, bytesPerPixel);
 
     return canvas;
   }
 
-  drawGridLines(ctx) {
+  drawGridLines(ctx, zoomLevel = 0) {
     // Set up dotted line style
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; // Brighter white
     ctx.lineWidth = 1;
@@ -235,7 +242,7 @@ class HilbertMemoryMap {
     ctx.setLineDash([]);
   }
 
-  drawScaleKey(ctx) {
+  drawScaleKey(ctx, level, bytesPerPixel) {
     const keyX = this.borderLeft + this.mapWidth + 50;
     const keyY = this.borderTop + 100;
 
@@ -246,42 +253,52 @@ class HilbertMemoryMap {
     // Title
     ctx.fillText('Scale:', keyX, keyY);
 
-    // 1 GB scale (approximately 4 pixels: 1GB / 256MiB = 4)
-    const gbPixels = Math.round(1024 * 1024 * 1024 / this.bytesPerPixel); // 1GB in pixels
-    const gbSize = Math.sqrt(gbPixels); // Approximate square size
+    // Show round sizes between 1 pixel and 128x128 pixels
+    const sizes = [
+      { bytes: 1, name: '1 byte' },
+      { bytes: 1024, name: '1 KiB' },
+      { bytes: 1024 * 1024, name: '1 MiB' },
+      { bytes: 1024 * 1024 * 1024, name: '1 GiB' },
+      { bytes: 1024 * 1024 * 1024 * 1024, name: '1 TiB' }
+    ];
 
-    ctx.fillStyle = '#808080';
-    ctx.fillRect(keyX, keyY + 30, gbSize, gbSize);
-    ctx.fillStyle = '#000000';
+    let yOffset = 30;
     ctx.font = '14px Arial';
-    ctx.fillText(`1 GiB (${gbPixels} pixels)`, keyX + gbSize + 10, keyY + 30 + gbSize/2);
-
-    // 1 TB scale (approximately 4096 pixels: 1TB / 256MiB = 4096)
-    const tbPixels = Math.round(1024 * 1024 * 1024 * 1024 / this.bytesPerPixel); // 1TB in pixels
-    const tbSize = Math.sqrt(tbPixels); // Approximate square size
-
-    ctx.fillStyle = '#404040';
-    ctx.fillRect(keyX, keyY + 100, tbSize, tbSize);
-    ctx.fillStyle = '#000000';
-    ctx.fillText(`1 TiB (${tbPixels} pixels)`, keyX + tbSize + 10, keyY + 100 + tbSize/2);
+    
+    for (const size of sizes) {
+      const pixels = size.bytes / bytesPerPixel;
+      const squareSize = Math.sqrt(pixels);
+      
+      if (squareSize >= 1 && squareSize <= 256) {
+        ctx.fillStyle = '#808080';
+        ctx.fillRect(keyX, keyY + yOffset, squareSize, squareSize);
+        ctx.fillStyle = '#000000';
+        ctx.fillText(`${size.name} (${pixels.toFixed(1)} px)`, keyX + squareSize + 10, keyY + yOffset + squareSize/2 + 5);
+        
+        yOffset += squareSize + 10;
+      }
+    }
 
     // Additional info
     ctx.font = '12px Arial';
-    ctx.fillText(`Each pixel = 256 MiB`, keyX, keyY + 250);
-    ctx.fillText(`Total space = 256 TiB`, keyX, keyY + 270);
+    ctx.fillText(`Each pixel = ${(bytesPerPixel / (1024*1024)).toFixed(1)} MiB`, keyX, keyY + yOffset + 20);
+    ctx.fillText(`Zoom level: ${level}`, keyX, keyY + yOffset + 40);
   }
 
-  generateMemoryMapBuffer(inputFile) {
+  generateMemoryMapBuffer(inputFile, level, minAddr, maxAddr) {
     console.log(`Reading memory layout from ${inputFile}...`);
     const textContent = fs.readFileSync(inputFile, 'utf8');
     const memoryRanges = this.parseMemoryData(textContent);
 
-    console.log(`Parsed ${memoryRanges.length} memory ranges`);
-    console.log(`Address space: 256 TiB (48-bit)`);
-    console.log(`Canvas: ${this.width}x${this.height} pixels`);
-    console.log(`Resolution: 256 MiB per pixel`);
+    const addressRange = maxAddr - minAddr;
+    const bytesPerPixel = addressRange / this.totalPixels;
 
-    const canvas = this.drawMemoryMap(memoryRanges);
+    console.log(`Parsed ${memoryRanges.length} memory ranges`);
+    console.log(`Address range: 0x${minAddr.toString(16)} - 0x${maxAddr.toString(16)}`);
+    console.log(`Canvas: ${this.width}x${this.height} pixels`);
+    console.log(`Resolution: ${bytesPerPixel / (1024*1024)} MiB per pixel`);
+
+    const canvas = this.drawMemoryMap(memoryRanges, level, minAddr, maxAddr);
     return canvas.toBuffer('image/png');
   }
 
@@ -347,16 +364,25 @@ class HilbertMemoryMap {
     <div class="container">
         <h1>Memory Map Visualization</h1>
         <p>48-bit virtual address space (256 TiB) mapped to 1024x1024 using Hilbert curve</p>
+        <p><button onclick="resetZoom()">Reset Zoom</button> | Double-click grid squares to zoom in | Press 'r' to reset</p>
         <canvas id="memoryCanvas"></canvas>
         <div class="tooltip" id="tooltip" style="display: none;"></div>
     </div>
     <script>
         let regions = [];
+        let zoomState = {
+            level: 0,                      // Current zoom level (0 = full view)
+            minAddr: 0,                    // Lowest address in current view
+            maxAddr: Math.pow(2, 48)      // Highest address in current view (256 TiB)
+        };
         
         async function loadMemoryMap() {
             const response = await fetch('/memory-data');
             regions = await response.json();
-            
+            updateCanvas();
+        }
+        
+        function updateCanvas() {
             const canvas = document.getElementById('memoryCanvas');
             const img = new Image();
             img.onload = function() {
@@ -365,7 +391,7 @@ class HilbertMemoryMap {
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(img, 0, 0);
             };
-            img.src = '/memory-map.png';
+            img.src = \`/memory-map.png?level=\${zoomState.level}&minAddr=\${zoomState.minAddr}&maxAddr=\${zoomState.maxAddr}\`;
         }
         
         function addressToPixelIndex(address) {
@@ -461,36 +487,76 @@ class HilbertMemoryMap {
             const canvas = document.getElementById('memoryCanvas');
             const tooltip = document.getElementById('tooltip');
             
+            let clickTimeout;
+            
             canvas.addEventListener('click', function(e) {
+                clearTimeout(clickTimeout);
+                clickTimeout = setTimeout(function() {
+                    const rect = canvas.getBoundingClientRect();
+                    const scaleX = canvas.width / rect.width;
+                    const scaleY = canvas.height / rect.height;
+                    const x = (e.clientX - rect.left) * scaleX;
+                    const y = (e.clientY - rect.top) * scaleY;
+                    
+                    const region = findRegionAtPixel(x, y);
+                    
+                    if (region) {
+                        const size = region.end - region.start;
+                        let sizeStr;
+                        if (size >= 1024 * 1024 * 1024 * 1024) {
+                            sizeStr = (size / (1024 * 1024 * 1024 * 1024)).toFixed(1) + ' TiB';
+                        } else if (size >= 1024 * 1024 * 1024) {
+                            sizeStr = (size / (1024 * 1024 * 1024)).toFixed(1) + ' GiB';
+                        } else if (size >= 1024 * 1024) {
+                            sizeStr = (size / (1024 * 1024)).toFixed(1) + ' MiB';
+                        } else if (size >= 1024) {
+                            sizeStr = (size / 1024).toFixed(1) + ' KiB';
+                        } else {
+                            sizeStr = size + ' bytes';
+                        }
+                        
+                        tooltip.innerHTML = \`<span class="tooltip-close" onclick="hideTooltip()">&times;</span>\${region.name}<br>0x\${region.start.toString(16)} - 0x\${region.end.toString(16)}<br>Size: \${sizeStr}\`;
+                        tooltip.style.display = 'block';
+                        tooltip.style.left = e.clientX + 'px';
+                        tooltip.style.top = e.clientY + 'px';
+                    } else {
+                        hideTooltip();
+                    }
+                }, 200); // Delay to allow double-click to cancel
+            });
+            
+            canvas.addEventListener('dblclick', function(e) {
+                clearTimeout(clickTimeout); // Cancel single-click
                 const rect = canvas.getBoundingClientRect();
                 const scaleX = canvas.width / rect.width;
                 const scaleY = canvas.height / rect.height;
                 const x = (e.clientX - rect.left) * scaleX;
                 const y = (e.clientY - rect.top) * scaleY;
                 
-                const region = findRegionAtPixel(x, y);
+                const borderLeft = 100;
+                const borderTop = 100;
+                const mapX = Math.floor(x - borderLeft);
+                const mapY = Math.floor(y - borderTop);
                 
-                if (region) {
-                    const size = region.end - region.start;
-                    let sizeStr;
-                    if (size >= 1024 * 1024 * 1024 * 1024) {
-                        sizeStr = (size / (1024 * 1024 * 1024 * 1024)).toFixed(1) + ' TiB';
-                    } else if (size >= 1024 * 1024 * 1024) {
-                        sizeStr = (size / (1024 * 1024 * 1024)).toFixed(1) + ' GiB';
-                    } else if (size >= 1024 * 1024) {
-                        sizeStr = (size / (1024 * 1024)).toFixed(1) + ' MiB';
-                    } else if (size >= 1024) {
-                        sizeStr = (size / 1024).toFixed(1) + ' KiB';
-                    } else {
-                        sizeStr = size + ' bytes';
-                    }
+                if (mapX >= 0 && mapX < 1024 && mapY >= 0 && mapY < 1024) {
+                    // Calculate which grid square was clicked (8x8 grid)
+                    const gridSize = 1024 / 8; // 128 pixels per grid square
+                    const gridX = Math.floor(mapX / gridSize);
+                    const gridY = Math.floor(mapY / gridSize);
                     
-                    tooltip.innerHTML = \`<span class="tooltip-close" onclick="hideTooltip()">&times;</span>\${region.name}<br>0x\${region.start.toString(16)} - 0x\${region.end.toString(16)}<br>Size: \${sizeStr}\`;
-                    tooltip.style.display = 'block';
-                    tooltip.style.left = e.clientX + 'px';
-                    tooltip.style.top = e.clientY + 'px';
-                } else {
+                    // Calculate address range for this grid square
+                    const currentRange = zoomState.maxAddr - zoomState.minAddr;
+                    const gridAddressSize = currentRange / 64; // 8x8 = 64 grid squares
+                    const gridStartAddr = zoomState.minAddr + (gridY * 8 + gridX) * gridAddressSize;
+                    const gridEndAddr = gridStartAddr + gridAddressSize;
+                    
+                    // Update zoom state
+                    zoomState.level++;
+                    zoomState.minAddr = gridStartAddr;
+                    zoomState.maxAddr = gridEndAddr;
+                    
                     hideTooltip();
+                    updateCanvas();
                 }
             });
             
@@ -518,6 +584,21 @@ class HilbertMemoryMap {
         function hideTooltip() {
             document.getElementById('tooltip').style.display = 'none';
         }
+        
+        function resetZoom() {
+            zoomState.level = 0;
+            zoomState.minAddr = 0;
+            zoomState.maxAddr = Math.pow(2, 48);
+            hideTooltip();
+            updateCanvas();
+        }
+        
+        // Keyboard shortcut for zoom reset
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'r' || e.key === 'R') {
+                resetZoom();
+            }
+        });
     </script>
 </body>
 </html>`);
@@ -533,9 +614,13 @@ class HilbertMemoryMap {
           res.end('Error loading memory data: ' + error.message);
         }
       } else if (parsedUrl.pathname === '/memory-map.png') {
-        // Serve PNG image
+        // Serve PNG image with optional zoom parameters
         try {
-          const pngBuffer = this.generateMemoryMapBuffer(inputFile);
+          const level = parseInt(parsedUrl.query.level) || 0;
+          const minAddr = parseInt(parsedUrl.query.minAddr) || 0;
+          const maxAddr = parseInt(parsedUrl.query.maxAddr) || Math.pow(2, 48);
+          
+          const pngBuffer = this.generateMemoryMapBuffer(inputFile, level, minAddr, maxAddr);
           res.writeHead(200, { 'Content-Type': 'image/png' });
           res.end(pngBuffer);
         } catch (error) {
