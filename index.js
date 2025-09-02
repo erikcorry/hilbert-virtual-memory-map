@@ -62,20 +62,12 @@ class HilbertMemoryMap {
 
       x += s * rx;
       y += s * ry;
-      t >>>= 2;
+      t = Math.floor(t / 4);
     }
 
     return [x, y];
   }
 
-  // Convert pixel index to canvas coordinates using single Hilbert curve
-  pixelIndexToCanvasCoords(pixelIndex) {
-    const order = 10; // 2^10 = 1024 for the 1024x1024 map
-    const [x, y] = this.hilbertIndexToXY(pixelIndex, order);
-
-    // Add border offset to map coordinates
-    return [x + this.borderLeft, y + this.borderTop];
-  }
 
   generateColorForName(name) {
     if (this.colorMap.has(name)) {
@@ -148,7 +140,7 @@ class HilbertMemoryMap {
     return memoryRanges.sort((a, b) => a.start - b.start);
   }
 
-  drawMemoryMap(memoryRanges, level, minAddr, maxAddr) {
+  drawMemoryMap(memoryRanges, level, minAddr, maxAddr, offsetX, offsetY) {
     const canvas = createCanvas(this.width, this.height);
     const ctx = canvas.getContext('2d');
 
@@ -173,6 +165,8 @@ class HilbertMemoryMap {
       range.end > minAddr && range.start < maxAddr
     );
     
+    console.log(`Filtering: minAddr=0x${minAddr.toString(16)} maxAddr=0x${maxAddr.toString(16)}`);
+    
     console.log(`Drawing ${visibleRanges.length}/${memoryRanges.length} visible ranges...`);
 
     // Create image data for the entire canvas
@@ -186,15 +180,31 @@ class HilbertMemoryMap {
       // Calculate pixel range for this memory range in current view
       const startAddr = Math.max(range.start, minAddr);
       const endAddr = Math.min(range.end, maxAddr);
-      const startPixelIndex = Math.floor((startAddr - minAddr) / bytesPerPixel);
-      const endPixelIndex = Math.floor((endAddr - minAddr) / bytesPerPixel);
+      
+      console.log(`Range ${rangeIndex}: start=0x${range.start.toString(16)} end=0x${range.end.toString(16)} minAddr=0x${minAddr.toString(16)} maxAddr=0x${maxAddr.toString(16)}`);
+      console.log(`Zoom level ${level}`);
 
-      // Fill pixels for this memory range
-      for (let pixelIndex = startPixelIndex; pixelIndex < endPixelIndex && pixelIndex < this.totalPixels; pixelIndex++) {
-        const [x, y] = this.pixelIndexToCanvasCoords(pixelIndex);
+      // Fill pixels for this memory range  
+      for (let address = startAddr; address < endAddr; address += bytesPerPixel) {
+        
+        // Get coordinates in 2^24 coordinate system
+        const order = 24;
+        const [x24, y24] = this.hilbertIndexToXY(address, order);
+        
+        // Scale from 2^24 to 1024 and apply offset
+        const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384
+        const levelZoomFactor = Math.pow(8, level);
+        const actualZoomFactor = baseZoomFactor / levelZoomFactor;
+        
+        const scaledX = Math.floor((x24 - offsetX) / actualZoomFactor);
+        const scaledY = Math.floor((y24 - offsetY) / actualZoomFactor);
+        
 
-        if (x >= 0 && x < this.width && y >= 0 && y < this.height) {
-          const dataIndex = (y * this.width + x) * 4;
+        if (scaledX >= 0 && scaledX < this.mapWidth && 
+            scaledY >= 0 && scaledY < this.mapHeight) {
+          const canvasX = scaledX + this.borderLeft;
+          const canvasY = scaledY + this.borderTop;
+          const dataIndex = (canvasY * this.width + canvasX) * 4;
           data[dataIndex] = r;     // Red
           data[dataIndex + 1] = g; // Green
           data[dataIndex + 2] = b; // Blue
@@ -285,7 +295,7 @@ class HilbertMemoryMap {
     ctx.fillText(`Zoom level: ${level}`, keyX, keyY + yOffset + 40);
   }
 
-  generateMemoryMapBuffer(inputFile, level, minAddr, maxAddr) {
+  generateMemoryMapBuffer(inputFile, level, minAddr, maxAddr, offsetX, offsetY) {
     console.log(`Reading memory layout from ${inputFile}...`);
     const textContent = fs.readFileSync(inputFile, 'utf8');
     const memoryRanges = this.parseMemoryData(textContent);
@@ -298,7 +308,7 @@ class HilbertMemoryMap {
     console.log(`Canvas: ${this.width}x${this.height} pixels`);
     console.log(`Resolution: ${bytesPerPixel / (1024*1024)} MiB per pixel`);
 
-    const canvas = this.drawMemoryMap(memoryRanges, level, minAddr, maxAddr);
+    const canvas = this.drawMemoryMap(memoryRanges, level, minAddr, maxAddr, offsetX, offsetY);
     return canvas.toBuffer('image/png');
   }
 
@@ -373,7 +383,9 @@ class HilbertMemoryMap {
         let zoomState = {
             level: 0,                      // Current zoom level (0 = full view)
             minAddr: 0,                    // Lowest address in current view
-            maxAddr: Math.pow(2, 48)      // Highest address in current view (256 TiB)
+            maxAddr: Math.pow(2, 48),     // Highest address in current view (256 TiB)
+            offsetX: 0,                   // X offset in 2^24 coordinate system
+            offsetY: 0                    // Y offset in 2^24 coordinate system
         };
         
         async function loadMemoryMap() {
@@ -391,7 +403,7 @@ class HilbertMemoryMap {
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(img, 0, 0);
             };
-            img.src = \`/memory-map.png?level=\${zoomState.level}&minAddr=\${zoomState.minAddr}&maxAddr=\${zoomState.maxAddr}\`;
+            img.src = \`/memory-map.png?level=\${zoomState.level}&minAddr=\${zoomState.minAddr}&maxAddr=\${zoomState.maxAddr}&offsetX=\${zoomState.offsetX}&offsetY=\${zoomState.offsetY}\`;
         }
         
         function addressToPixelIndex(address) {
@@ -399,36 +411,12 @@ class HilbertMemoryMap {
             return Math.floor(address / bytesPerPixel);
         }
         
-        function hilbertIndexToXY(index) {
-            const n = 1024;
-            let x = 0, y = 0;
-            let t = index;
-            
-            for (let s = 1; s < n; s <<= 1) {
-                const rx = 1 & (t >>> 1);
-                const ry = 1 & (t ^ rx);
-                
-                if (ry === 0) {
-                    if (rx === 1) {
-                        x = s - 1 - x;
-                        y = s - 1 - y;
-                    }
-                    [x, y] = [y, x];
-                }
-                
-                x += s * rx;
-                y += s * ry;
-                t >>>= 2;
-            }
-            
-            return [x, y];
-        }
         
         function xyToHilbertIndex(x, y) {
             const n = 1024;
             let index = 0;
             
-            for (let s = n >>> 1; s > 0; s >>>= 1) {
+            for (let s = n >>> 1; s > 0; s = Math.floor(s / 2)) {
                 let rx = (x & s) > 0 ? 1 : 0;
                 let ry = (y & s) > 0 ? 1 : 0;
                 index += s * s * ((3 * rx) ^ ry);
@@ -445,7 +433,7 @@ class HilbertMemoryMap {
             return index;
         }
 
-        function findRegionAtPixel(canvasX, canvasY) {
+        function findAddressAtPixel(canvasX, canvasY) {
             const borderLeft = 100;
             const borderTop = 100;
             const mapX = Math.floor(canvasX - borderLeft);
@@ -453,33 +441,27 @@ class HilbertMemoryMap {
             
             if (mapX < 0 || mapX >= 1024 || mapY < 0 || mapY >= 1024) return null;
             
-            let bestMatch = null;
-            let bestDistance = Infinity;
+            // Calculate address using current zoom range and Hilbert mapping
+            const currentRange = zoomState.maxAddr - zoomState.minAddr;
+            const bytesPerPixel = currentRange / (1024 * 1024);
+            const hilbertIndex = xyToHilbertIndex(mapX, mapY);
+            const address = zoomState.minAddr + hilbertIndex * bytesPerPixel;
             
-            // Check area around the click point for small regions
-            for (let dx = -3; dx <= 3; dx++) {
-                for (let dy = -3; dy <= 3; dy++) {
-                    const checkX = mapX + dx;
-                    const checkY = mapY + dy;
-                    if (checkX < 0 || checkX >= 1024 || checkY < 0 || checkY >= 1024) continue;
-                    
-                    const hilbertIndex = xyToHilbertIndex(checkX, checkY);
-                    const address = hilbertIndex * Math.pow(2, 28); // 256MB per pixel
-                    
-                    for (const region of regions) {
-                        if (address >= region.start && address < region.end) {
-                            const distance = Math.abs(dx) + Math.abs(dy);
-                            if (distance < bestDistance) {
-                                bestDistance = distance;
-                                bestMatch = region;
-                            }
-                        }
-                    }
+            return address;
+        }
+        
+        function findRegionFromAddress(address) {
+            if (address === null) return null;
+            
+            for (const region of regions) {
+                if (address >= region.start && address < region.end) {
+                    return region;
                 }
             }
             
-            return bestMatch;
+            return null;
         }
+
         
         document.addEventListener('DOMContentLoaded', function() {
             loadMemoryMap();
@@ -498,7 +480,8 @@ class HilbertMemoryMap {
                     const x = (e.clientX - rect.left) * scaleX;
                     const y = (e.clientY - rect.top) * scaleY;
                     
-                    const region = findRegionAtPixel(x, y);
+                    const address = findAddressAtPixel(x, y);
+                    const region = findRegionFromAddress(address);
                     
                     if (region) {
                         const size = region.end - region.start;
@@ -538,22 +521,48 @@ class HilbertMemoryMap {
                 const mapX = Math.floor(x - borderLeft);
                 const mapY = Math.floor(y - borderTop);
                 
+                console.log(\`Double-click at canvas (\${x.toFixed(1)}, \${y.toFixed(1)}) -> map (\${mapX}, \${mapY})\`);
+                console.log(\`Current zoom state: level=\${zoomState.level}, offsetX=\${zoomState.offsetX}, offsetY=\${zoomState.offsetY}\`);
+                console.log(\`Current address range: 0x\${zoomState.minAddr.toString(16)} - 0x\${zoomState.maxAddr.toString(16)}\`);
+                
                 if (mapX >= 0 && mapX < 1024 && mapY >= 0 && mapY < 1024) {
-                    // Calculate which grid square was clicked (8x8 grid)
-                    const gridSize = 1024 / 8; // 128 pixels per grid square
-                    const gridX = Math.floor(mapX / gridSize);
-                    const gridY = Math.floor(mapY / gridSize);
+                    // Find what address was clicked
+                    const clickedAddress = findAddressAtPixel(x, y);
+                    console.log(\`Clicked address: 0x\${clickedAddress.toString(16)}\`);
                     
-                    // Calculate address range for this grid square
+                    // Round to nearest 64th boundaries
                     const currentRange = zoomState.maxAddr - zoomState.minAddr;
-                    const gridAddressSize = currentRange / 64; // 8x8 = 64 grid squares
-                    const gridStartAddr = zoomState.minAddr + (gridY * 8 + gridX) * gridAddressSize;
+                    const gridAddressSize = currentRange / 64; // 8x8 = 64 squares
+                    const gridIndex = Math.floor((clickedAddress - zoomState.minAddr) / gridAddressSize);
+                    const gridStartAddr = zoomState.minAddr + gridIndex * gridAddressSize;
                     const gridEndAddr = gridStartAddr + gridAddressSize;
+                    console.log(\`Grid: index=\${gridIndex}, range=0x\${gridStartAddr.toString(16)} - 0x\${gridEndAddr.toString(16)}\`);
+                    
+                    // Calculate new offsets based on canvas coordinates
+                    // Each 8x8 grid square becomes the new canvas, so find which grid square was clicked
+                    const gridX = Math.floor(mapX / (1024 / 8)); // Which of the 8 columns
+                    const gridY = Math.floor(mapY / (1024 / 8)); // Which of the 8 rows
+                    const pixelsPerGrid = 1024 / 8; // 128 pixels per grid square
+                    console.log(\`Grid position: (\${gridX}, \${gridY}), pixels per grid: \${pixelsPerGrid}\`);
+                    
+                    // Calculate the offset in Hilbert coordinate system (order 24)
+                    const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384 (maps 2^24 coords to 1024 pixels)
+                    const levelZoomFactor = Math.pow(8, zoomState.level);
+                    const actualZoomFactor = baseZoomFactor / levelZoomFactor;
+                    
+                    const newOffsetX = zoomState.offsetX + gridX * pixelsPerGrid * actualZoomFactor;
+                    const newOffsetY = zoomState.offsetY + gridY * pixelsPerGrid * actualZoomFactor;
+                    console.log(\`Actual zoom factor: \${actualZoomFactor}, new offsets: (\${newOffsetX}, \${newOffsetY})\`);
                     
                     // Update zoom state
                     zoomState.level++;
                     zoomState.minAddr = gridStartAddr;
                     zoomState.maxAddr = gridEndAddr;
+                    zoomState.offsetX = newOffsetX;
+                    zoomState.offsetY = newOffsetY;
+                    
+                    console.log(\`Updated zoom state: level=\${zoomState.level}, offsetX=\${zoomState.offsetX}, offsetY=\${zoomState.offsetY}\`);
+                    console.log(\`New address range: 0x\${zoomState.minAddr.toString(16)} - 0x\${zoomState.maxAddr.toString(16)}\`);
                     
                     hideTooltip();
                     updateCanvas();
@@ -589,6 +598,8 @@ class HilbertMemoryMap {
             zoomState.level = 0;
             zoomState.minAddr = 0;
             zoomState.maxAddr = Math.pow(2, 48);
+            zoomState.offsetX = 0;
+            zoomState.offsetY = 0;
             hideTooltip();
             updateCanvas();
         }
@@ -619,13 +630,16 @@ class HilbertMemoryMap {
           const level = parseInt(parsedUrl.query.level) || 0;
           const minAddr = parseInt(parsedUrl.query.minAddr) || 0;
           const maxAddr = parseInt(parsedUrl.query.maxAddr) || Math.pow(2, 48);
+          const offsetX = parseInt(parsedUrl.query.offsetX) || 0;
+          const offsetY = parseInt(parsedUrl.query.offsetY) || 0;
           
-          const pngBuffer = this.generateMemoryMapBuffer(inputFile, level, minAddr, maxAddr);
+          const pngBuffer = this.generateMemoryMapBuffer(inputFile, level, minAddr, maxAddr, offsetX, offsetY);
           res.writeHead(200, { 'Content-Type': 'image/png' });
           res.end(pngBuffer);
         } catch (error) {
+          console.error('Error generating memory map:', error);
           res.writeHead(500, { 'Content-Type': 'text/plain' });
-          res.end('Error generating memory map: ' + error.message);
+          res.end('Error generating memory map: ' + error.message + '\n' + error.stack);
         }
       } else {
         // 404 for other paths
