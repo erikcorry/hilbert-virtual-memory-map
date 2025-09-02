@@ -306,12 +306,40 @@ class HilbertMemoryMap {
             margin: 0 auto; 
             text-align: center; 
             overflow-x: auto;
+            position: relative;
         }
-        img { 
+        canvas { 
             border: 1px solid #ddd; 
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             max-width: 100%;
             height: auto;
+            cursor: crosshair;
+        }
+        .tooltip {
+            position: absolute;
+            background: #f0f0f0;
+            color: black;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: auto;
+            z-index: 1000;
+            white-space: nowrap;
+            transform: translate(-50%, -100%);
+            margin-top: -10px;
+            min-width: 200px;
+        }
+        .tooltip-close {
+            position: absolute;
+            top: 2px;
+            right: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            color: #666;
+            font-size: 14px;
+        }
+        .tooltip-close:hover {
+            color: #000;
         }
     </style>
 </head>
@@ -319,10 +347,177 @@ class HilbertMemoryMap {
     <div class="container">
         <h1>Memory Map Visualization</h1>
         <p>48-bit virtual address space (256 TiB) mapped to 1024x1024 using Hilbert curve</p>
-        <img src="/memory-map.png" alt="Memory Map" />
+        <canvas id="memoryCanvas"></canvas>
+        <div class="tooltip" id="tooltip" style="display: none;"></div>
     </div>
+    <script>
+        let regions = [];
+        
+        async function loadMemoryMap() {
+            const response = await fetch('/memory-data');
+            regions = await response.json();
+            
+            const canvas = document.getElementById('memoryCanvas');
+            const img = new Image();
+            img.onload = function() {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+            };
+            img.src = '/memory-map.png';
+        }
+        
+        function addressToPixelIndex(address) {
+            const bytesPerPixel = Math.pow(2, 48 - 20); // 2^28 = 256MB
+            return Math.floor(address / bytesPerPixel);
+        }
+        
+        function hilbertIndexToXY(index) {
+            const n = 1024;
+            let x = 0, y = 0;
+            let t = index;
+            
+            for (let s = 1; s < n; s <<= 1) {
+                const rx = 1 & (t >>> 1);
+                const ry = 1 & (t ^ rx);
+                
+                if (ry === 0) {
+                    if (rx === 1) {
+                        x = s - 1 - x;
+                        y = s - 1 - y;
+                    }
+                    [x, y] = [y, x];
+                }
+                
+                x += s * rx;
+                y += s * ry;
+                t >>>= 2;
+            }
+            
+            return [x, y];
+        }
+        
+        function xyToHilbertIndex(x, y) {
+            const n = 1024;
+            let index = 0;
+            
+            for (let s = n >>> 1; s > 0; s >>>= 1) {
+                let rx = (x & s) > 0 ? 1 : 0;
+                let ry = (y & s) > 0 ? 1 : 0;
+                index += s * s * ((3 * rx) ^ ry);
+                
+                if (ry === 0) {
+                    if (rx === 1) {
+                        x = n - 1 - x;
+                        y = n - 1 - y;
+                    }
+                    [x, y] = [y, x];
+                }
+            }
+            
+            return index;
+        }
+
+        function findRegionAtPixel(canvasX, canvasY) {
+            const borderLeft = 100;
+            const borderTop = 100;
+            const mapX = Math.floor(canvasX - borderLeft);
+            const mapY = Math.floor(canvasY - borderTop);
+            
+            if (mapX < 0 || mapX >= 1024 || mapY < 0 || mapY >= 1024) return null;
+            
+            let bestMatch = null;
+            let bestDistance = Infinity;
+            
+            // Check area around the click point for small regions
+            for (let dx = -3; dx <= 3; dx++) {
+                for (let dy = -3; dy <= 3; dy++) {
+                    const checkX = mapX + dx;
+                    const checkY = mapY + dy;
+                    if (checkX < 0 || checkX >= 1024 || checkY < 0 || checkY >= 1024) continue;
+                    
+                    const hilbertIndex = xyToHilbertIndex(checkX, checkY);
+                    const address = hilbertIndex * Math.pow(2, 28); // 256MB per pixel
+                    
+                    for (const region of regions) {
+                        if (address >= region.start && address < region.end) {
+                            const distance = Math.abs(dx) + Math.abs(dy);
+                            if (distance < bestDistance) {
+                                bestDistance = distance;
+                                bestMatch = region;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return bestMatch;
+        }
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            loadMemoryMap();
+            
+            const canvas = document.getElementById('memoryCanvas');
+            const tooltip = document.getElementById('tooltip');
+            
+            canvas.addEventListener('click', function(e) {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const x = (e.clientX - rect.left) * scaleX;
+                const y = (e.clientY - rect.top) * scaleY;
+                
+                const region = findRegionAtPixel(x, y);
+                
+                if (region) {
+                    tooltip.innerHTML = \`<span class="tooltip-close" onclick="hideTooltip()">&times;</span>\${region.name}<br>0x\${region.start.toString(16)} - 0x\${region.end.toString(16)}\`;
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = e.clientX + 'px';
+                    tooltip.style.top = e.clientY + 'px';
+                } else {
+                    hideTooltip();
+                }
+            });
+            
+            // Click outside map area to dismiss
+            document.addEventListener('click', function(e) {
+                const canvas = document.getElementById('memoryCanvas');
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const x = (e.clientX - rect.left) * scaleX;
+                const y = (e.clientY - rect.top) * scaleY;
+                
+                const borderLeft = 100;
+                const borderTop = 100;
+                const mapX = x - borderLeft;
+                const mapY = y - borderTop;
+                
+                // If click is outside the 1024x1024 map area or outside canvas entirely
+                if (e.target !== canvas || mapX < 0 || mapX >= 1024 || mapY < 0 || mapY >= 1024) {
+                    hideTooltip();
+                }
+            });
+        });
+        
+        function hideTooltip() {
+            document.getElementById('tooltip').style.display = 'none';
+        }
+    </script>
 </body>
 </html>`);
+      } else if (parsedUrl.pathname === '/memory-data') {
+        // Serve memory data as JSON for tooltip functionality
+        try {
+          const textContent = fs.readFileSync(inputFile, 'utf8');
+          const memoryRanges = this.parseMemoryData(textContent);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(memoryRanges));
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Error loading memory data: ' + error.message);
+        }
       } else if (parsedUrl.pathname === '/memory-map.png') {
         // Serve PNG image
         try {
