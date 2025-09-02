@@ -20,7 +20,7 @@ const { createCanvas } = require('canvas');
 class HilbertMemoryMap {
   constructor() {
     this.mapWidth = 1024;
-    this.mapHeight = 2048;
+    this.mapHeight = 1024;
     this.borderTop = 200;
     this.borderBottom = 200;
     this.borderLeft = 200;
@@ -28,7 +28,7 @@ class HilbertMemoryMap {
     this.width = this.mapWidth + this.borderLeft + this.borderRight;
     this.height = this.mapHeight + this.borderTop + this.borderBottom;
     this.totalPixels = this.mapWidth * this.mapHeight; // 2,097,152 pixels
-    this.addressSpaceBits = 47; // 47-bit user space
+    this.addressSpaceBits = 48; // 48-bit virtual space
     this.bytesPerPixel = Math.pow(2, this.addressSpaceBits - Math.log2(this.totalPixels)); // 2^26 = 64 MiB
   }
 
@@ -64,28 +64,13 @@ class HilbertMemoryMap {
     return [x, y];
   }
 
-  // Convert pixel index to canvas coordinates using dual Hilbert curves
+  // Convert pixel index to canvas coordinates using single Hilbert curve
   pixelIndexToCanvasCoords(pixelIndex) {
-    const order = 10; // 2^10 = 1024 for each 1024x1024 square
-    const squareSize = 1 << order; // 1024
-    const pixelsPerSquare = squareSize * squareSize; // 1024 * 1024 = 2^20
-
-    let mapX, mapY;
-    if (pixelIndex < pixelsPerSquare) {
-      // First half: top 1024x1024 square (reflected)
-      const [x, y] = this.hilbertIndexToXY(pixelIndex, order);
-      mapX = y;  // Reflect to match bottom half
-      mapY = x;
-    } else {
-      // Second half: bottom 1024x1024 square (also reflected, shifted down)
-      const localIndex = pixelIndex - pixelsPerSquare;
-      const [x, y] = this.hilbertIndexToXY(localIndex, order);
-      mapX = y;  // Reflect and shift down by 1024
-      mapY = squareSize + x;
-    }
+    const order = 10; // 2^10 = 1024 for the 1024x1024 map
+    const [x, y] = this.hilbertIndexToXY(pixelIndex, order);
 
     // Add border offset to map coordinates
-    return [mapX + this.borderLeft, mapY + this.borderTop];
+    return [x + this.borderLeft, y + this.borderTop];
   }
 
   parseMemoryData(textContent) {
@@ -191,13 +176,12 @@ class HilbertMemoryMap {
     ctx.lineWidth = 1;
     ctx.setLineDash([2, 4]); // Dotted pattern
 
-    // 1TB = 16384 pixels = 128x128 square in Hilbert space
-    const tbSize = 128; // sqrt(16384) = 128
+    // 1TB = 4096 pixels = 64x64 square in Hilbert space (1TB / 256MB = 4096)
+    const tbSize = 64; // sqrt(4096) = 64
 
-    // Draw grid lines every 128 pixels in both directions for each 1024x1024 square
+    // Draw grid lines every 64 pixels in both directions
     ctx.beginPath();
 
-    // Grid lines for top square
     for (let i = tbSize; i < 1024; i += tbSize) {
       // Vertical lines
       ctx.moveTo(this.borderLeft + i, this.borderTop);
@@ -206,20 +190,6 @@ class HilbertMemoryMap {
       ctx.moveTo(this.borderLeft, this.borderTop + i);
       ctx.lineTo(this.borderLeft + 1024, this.borderTop + i);
     }
-
-    // Grid lines for bottom square
-    for (let i = tbSize; i < 1024; i += tbSize) {
-      // Vertical lines
-      ctx.moveTo(this.borderLeft + i, this.borderTop + 1024);
-      ctx.lineTo(this.borderLeft + i, this.borderTop + 2048);
-      // Horizontal lines
-      ctx.moveTo(this.borderLeft, this.borderTop + 1024 + i);
-      ctx.lineTo(this.borderLeft + 1024, this.borderTop + 1024 + i);
-    }
-
-    // Draw the middle horizontal line separating the two 1024x1024 squares
-    ctx.moveTo(this.borderLeft, this.borderTop + 1024);
-    ctx.lineTo(this.borderLeft + 1024, this.borderTop + 1024);
 
     ctx.stroke();
 
@@ -238,7 +208,7 @@ class HilbertMemoryMap {
     // Title
     ctx.fillText('Scale:', keyX, keyY);
 
-    // 1 GB scale (approximately 16 pixels: 1GB / 64MiB = 16)
+    // 1 GB scale (approximately 4 pixels: 1GB / 256MiB = 4)
     const gbPixels = Math.round(1024 * 1024 * 1024 / this.bytesPerPixel); // 1GB in pixels
     const gbSize = Math.sqrt(gbPixels); // Approximate square size
 
@@ -248,7 +218,7 @@ class HilbertMemoryMap {
     ctx.font = '14px Arial';
     ctx.fillText(`1 GiB (${gbPixels} pixels)`, keyX + gbSize + 10, keyY + 30 + gbSize/2);
 
-    // 1 TB scale (approximately 16384 pixels: 1TB / 64MiB = 16384)
+    // 1 TB scale (approximately 4096 pixels: 1TB / 256MiB = 4096)
     const tbPixels = Math.round(1024 * 1024 * 1024 * 1024 / this.bytesPerPixel); // 1TB in pixels
     const tbSize = Math.sqrt(tbPixels); // Approximate square size
 
@@ -259,8 +229,8 @@ class HilbertMemoryMap {
 
     // Additional info
     ctx.font = '12px Arial';
-    ctx.fillText(`Each pixel = 64 MiB`, keyX, keyY + 250);
-    ctx.fillText(`Total space = 128 TiB`, keyX, keyY + 270);
+    ctx.fillText(`Each pixel = 256 MiB`, keyX, keyY + 250);
+    ctx.fillText(`Total space = 256 TiB`, keyX, keyY + 270);
   }
 
   async generateMemoryMap(inputFile, outputFile) {
@@ -270,9 +240,9 @@ class HilbertMemoryMap {
       const memoryRanges = this.parseMemoryData(textContent);
 
       console.log(`Parsed ${memoryRanges.length} memory ranges`);
-      console.log(`Address space: 128 TiB (47-bit)`);
+      console.log(`Address space: 256 TiB (48-bit)`);
       console.log(`Canvas: ${this.width}x${this.height} pixels`);
-      console.log(`Resolution: 64 MiB per pixel`);
+      console.log(`Resolution: 256 MiB per pixel`);
 
       const canvas = this.drawMemoryMap(memoryRanges);
       const buffer = canvas.toBuffer('image/png');
@@ -311,8 +281,8 @@ Where:
 - r, g, b, a are color values (0-255)
 
 Features:
-- Maps 47-bit virtual address space (128 TiB)
-- 1024x2048 pixel output (64 MiB per pixel)
+- Maps 48-bit virtual address space (256 TiB)
+- 1024x1024 pixel output (256 MiB per pixel)
 - Uses Hilbert curve for space-filling mapping
 - Adjacent addresses remain visually adjacent
   `);
