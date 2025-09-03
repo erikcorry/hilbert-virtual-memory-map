@@ -503,6 +503,24 @@ function drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRi
 function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLevel) {
     const tbSize = 128; // 128x128 pixel squares
     
+    // Helper function to draw a single line segment with appropriate style
+    function drawLineSegment(startX, startY, endX, endY, connected) {
+        // Set up style based on connectivity
+        if (connected) {
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 4]); // Dotted pattern - squares ARE adjacent
+        } else {
+            ctx.lineWidth = 3;
+            ctx.setLineDash([]); // Solid line - squares are NOT adjacent
+        }
+        
+        // Draw the segment with border adjustment
+        ctx.beginPath();
+        ctx.moveTo(borderLeft + startX, borderTop + startY);
+        ctx.lineTo(borderLeft + endX, borderTop + endY);
+        ctx.stroke();
+    }
+    
     // Helper function to check if two adjacent squares are adjacent in memory
     function areSquaresAdjacentInMemory(x1, y1, x2, y2) {
         // Get center points of both squares
@@ -550,20 +568,8 @@ function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLeve
             // Check if squares on left and right of this line are adjacent in memory
             const isAdjacent = areSquaresAdjacentInMemory(leftSquareX, squareY, rightSquareX, squareY);
             
-            // Set up style for this segment
-            if (isAdjacent) {
-                ctx.lineWidth = 1;
-                ctx.setLineDash([2, 4]); // Dotted pattern - squares ARE adjacent
-            } else {
-                ctx.lineWidth = 3;
-                ctx.setLineDash([]); // Solid line - squares are NOT adjacent
-            }
-            
-            // Draw this segment
-            ctx.beginPath();
-            ctx.moveTo(borderLeft + i, borderTop + j);
-            ctx.lineTo(borderLeft + i, borderTop + j + tbSize);
-            ctx.stroke();
+            // Draw this segment using the helper function
+            drawLineSegment(i, j, i, j + tbSize, isAdjacent);
         }
     }
     
@@ -578,20 +584,8 @@ function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLeve
             // Check if squares above and below this line are adjacent in memory
             const isAdjacent = areSquaresAdjacentInMemory(squareX, topSquareY, squareX, bottomSquareY);
             
-            // Set up style for this segment
-            if (isAdjacent) {
-                ctx.lineWidth = 1;
-                ctx.setLineDash([2, 4]); // Dotted pattern - squares ARE adjacent
-            } else {
-                ctx.lineWidth = 3;
-                ctx.setLineDash([]); // Solid line - squares are NOT adjacent
-            }
-            
-            // Draw this segment
-            ctx.beginPath();
-            ctx.moveTo(borderLeft + j, borderTop + i);
-            ctx.lineTo(borderLeft + j + tbSize, borderTop + i);
-            ctx.stroke();
+            // Draw this segment using the helper function
+            drawLineSegment(j, i, j + tbSize, i, isAdjacent);
         }
     }
     
