@@ -2,6 +2,8 @@ let regions = [];
 let originalTextContent = '';
 let colorMap = new Map();
 let colorIndex = 0;
+let highlightedRegion = null;
+let originalCanvasData = null;
 let zoomState = {
     level: 0,                      // Current zoom level (0 = full view).
     minAddr: 0,                    // Lowest address in current view.
@@ -121,6 +123,82 @@ function resetToOriginal() {
     setStatus('Reset to original content');
 }
 
+function getAlignment(address) {
+    // Calculate alignment: start with 128TB and divide by 2 until aligned
+    let alignment = 128 * 1024 * 1024 * 1024 * 1024; // 128TB in bytes
+    while (alignment > 1 && (address % alignment) !== 0) {
+        alignment = Math.floor(alignment / 2);
+    }
+    return alignment;
+}
+
+function applyShading(region) {
+    const canvas = document.getElementById('memoryCanvas');
+    const ctx = canvas.getContext('2d');
+    const mapWidth = 1024;
+    const mapHeight = 1024;
+    const borderLeft = 100;
+    const borderTop = 100;
+    
+    // Store original canvas data
+    originalCanvasData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    highlightedRegion = region;
+    
+    // Get image data for the map area
+    const imageData = ctx.getImageData(borderLeft, borderTop, mapWidth, mapHeight);
+    const data = imageData.data;
+    
+    // Calculate visible address range for current zoom
+    const { minAddr, maxAddr } = zoomState;
+    const bytesPerPixel = (maxAddr - minAddr) / (mapWidth * mapHeight);
+    
+    // Apply shading to pixels in the highlighted region
+    const startAddr = Math.max(region.start, minAddr);
+    const endAddr = Math.min(region.end, maxAddr);
+    
+    for (let address = startAddr; address < endAddr; address += bytesPerPixel) {
+        // Get coordinates in 2^24 coordinate system
+        const order = 24;
+        const [x24, y24] = hilbertIndexToXY(address, order);
+        
+        // Scale from 2^24 to 1024 and apply offset
+        const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384
+        const levelZoomFactor = Math.pow(8, zoomState.level);
+        const actualZoomFactor = baseZoomFactor / levelZoomFactor;
+        
+        const scaledX = Math.floor((x24 - zoomState.offsetX) / actualZoomFactor);
+        const scaledY = Math.floor((y24 - zoomState.offsetY) / actualZoomFactor);
+        
+        if (scaledX >= 0 && scaledX < mapWidth && scaledY >= 0 && scaledY < mapHeight) {
+            // Check if this pixel should be highlighted based on shading pattern
+            const shadingValue = (scaledX + scaledY) % 8;
+            if (shadingValue >= 2 && shadingValue <= 4) {
+                const dataIndex = (scaledY * mapWidth + scaledX) * 4;
+                data[dataIndex] = 255;     // Red = white
+                data[dataIndex + 1] = 255; // Green = white  
+                data[dataIndex + 2] = 255; // Blue = white
+                data[dataIndex + 3] = 255; // Alpha = opaque
+            }
+        }
+    }
+    
+    // Put the modified image data back
+    ctx.putImageData(imageData, borderLeft, borderTop);
+}
+
+function removeShading() {
+    if (originalCanvasData) {
+        const canvas = document.getElementById('memoryCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Restore original canvas data
+        ctx.putImageData(originalCanvasData, 0, 0);
+        
+        originalCanvasData = null;
+        highlightedRegion = null;
+    }
+}
+
 function parseMemoryData(textContent) {
     const lines = textContent.split('\n').filter(line => line.trim());
     const tempMemoryRanges = [];
@@ -226,6 +304,10 @@ async function loadMemoryMap() {
 function updateCanvas() {
     const canvas = document.getElementById('memoryCanvas');
     const ctx = canvas.getContext('2d');
+
+    // Clear any existing shading
+    originalCanvasData = null;
+    highlightedRegion = null;
 
     // Set canvas size
     const mapWidth = 1024;
@@ -507,6 +589,7 @@ function drawScaleKey(ctx, mapWidth, borderLeft, borderTop, borderRight, level, 
 
 function hideTooltip() {
     document.getElementById('tooltip').style.display = 'none';
+    removeShading();
 }
 
 function resetZoom() {
@@ -536,19 +619,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (region) {
                 const size = region.end - region.start;
-                const sizeStr = formatBytes(size);
+                const sizeHex = '0x' + size.toString(16);
+                const sizeApprox = formatBytes(size);
                 
-                // Calculate alignment: start with 128TB and divide by 2 until aligned
-                let alignment = 128 * 1024 * 1024 * 1024 * 1024; // 128TB in bytes
-                while (alignment > 1 && (region.start % alignment) !== 0) {
-                    alignment = Math.floor(alignment / 2);
-                }
-                const alignmentStr = formatBytes(alignment);
+                const startAlignment = getAlignment(region.start);
+                const endAlignment = getAlignment(region.end);
+                const startAlignmentStr = formatBytes(startAlignment);
+                const endAlignmentStr = formatBytes(endAlignment);
 
-                tooltip.innerHTML = `<span class="tooltip-close" onclick="hideTooltip()">&times;</span>${region.name}<br>0x${region.start.toString(16)} - 0x${region.end.toString(16)}<br>Size: ${sizeStr}<br>Alignment: ${alignmentStr}`;
+                tooltip.innerHTML = `<span class="tooltip-close" onclick="hideTooltip()">&times;</span>${region.name}<br>0x${region.start.toString(16)} - 0x${region.end.toString(16)}<br>Size: ${sizeHex} (ca. ${sizeApprox})<br>Start alignment: ${startAlignmentStr}<br>End alignment: ${endAlignmentStr}`;
                 tooltip.style.display = 'block';
                 tooltip.style.left = e.clientX + 'px';
-                tooltip.style.top = e.clientY + 'px';
+                tooltip.style.top = (e.clientY - 100) + 'px';
+                
+                // Remove any existing shading and apply new shading
+                removeShading();
+                applyShading(region);
             } else {
                 hideTooltip();
             }
