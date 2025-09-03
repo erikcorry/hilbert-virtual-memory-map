@@ -928,6 +928,109 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     });
 
+    // Touch event support for mobile
+    let lastTouchTime = 0;
+    let touchTimeout;
+    
+    canvas.addEventListener('touchstart', function(e) {
+        // Prevent browser zoom and scrolling
+        e.preventDefault();
+        
+        // Don't handle touches during animation
+        if (animationState.isAnimating) {
+            return;
+        }
+        
+        const currentTime = Date.now();
+        const timeDiff = currentTime - lastTouchTime;
+        
+        // Clear any existing timeout
+        clearTimeout(touchTimeout);
+        
+        if (timeDiff < 300 && timeDiff > 0) {
+            // Double tap detected - trigger zoom
+            const touch = e.touches[0];
+            const coords = getMapCoordinates({
+                clientX: touch.clientX,
+                clientY: touch.clientY
+            }, canvas);
+            
+            const maxZoomLevel = 4;
+            
+            if (zoomState.level >= maxZoomLevel) {
+                return;
+            }
+            
+            if (coords.mapX >= 0 && coords.mapX < 1024 && coords.mapY >= 0 && coords.mapY < 1024) {
+                // Same zoom logic as double-click
+                const clickedAddress = findAddressAtPixel(coords.mapX, coords.mapY);
+                const currentRange = zoomState.maxAddr - zoomState.minAddr;
+                const gridAddressSize = currentRange / 64;
+                const gridIndex = Math.floor((clickedAddress - zoomState.minAddr) / gridAddressSize);
+                const gridStartAddr = zoomState.minAddr + gridIndex * gridAddressSize;
+                const gridEndAddr = gridStartAddr + gridAddressSize;
+                
+                const gridX = Math.floor(coords.mapX / (1024 / 8));
+                const gridY = Math.floor(coords.mapY / (1024 / 8));
+                const pixelsPerGrid = 1024 / 8;
+                
+                const baseZoomFactor = Math.pow(2, 24 - 10);
+                const levelZoomFactor = Math.pow(8, zoomState.level);
+                const actualZoomFactor = baseZoomFactor / levelZoomFactor;
+                
+                const newOffsetX = zoomState.offsetX + gridX * pixelsPerGrid * actualZoomFactor;
+                const newOffsetY = zoomState.offsetY + gridY * pixelsPerGrid * actualZoomFactor;
+                
+                const newZoomState = {
+                    level: zoomState.level + 1,
+                    minAddr: gridStartAddr,
+                    maxAddr: gridEndAddr,
+                    offsetX: newOffsetX,
+                    offsetY: newOffsetY
+                };
+                
+                hideTooltip();
+                animateZoom(gridX, gridY, newZoomState);
+            }
+            
+            lastTouchTime = 0; // Reset to prevent triple-tap
+        } else {
+            // Single tap - show tooltip after delay
+            touchTimeout = setTimeout(function() {
+                const touch = e.touches[0];
+                const coords = getMapCoordinates({
+                    clientX: touch.clientX,
+                    clientY: touch.clientY
+                }, canvas);
+                const address = findAddressAtPixel(coords.mapX, coords.mapY);
+                const region = findRegionFromAddress(address);
+                
+                if (region) {
+                    const size = region.end - region.start;
+                    const sizeHex = '0x' + size.toString(16);
+                    const sizeApprox = formatBytes(size);
+                    
+                    const startAlignment = getAlignment(region.start);
+                    const endAlignment = getAlignment(region.end);
+                    const startAlignmentStr = formatBytes(startAlignment);
+                    const endAlignmentStr = formatBytes(endAlignment);
+                    
+                    tooltip.innerHTML = `<span class="tooltip-close" onclick="hideTooltip()">&times;</span>${region.name}<br>0x${region.start.toString(16)} - 0x${region.end.toString(16)}<br>Size: ${sizeHex} (ca. ${sizeApprox})<br>Start alignment: ${startAlignmentStr}<br>End alignment: ${endAlignmentStr}`;
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = touch.clientX + 'px';
+                    tooltip.style.top = (touch.clientY - 100) + 'px';
+                    
+                    removeShading();
+                    applyShading(region);
+                } else {
+                    hideTooltip();
+                }
+            }, 200);
+            
+            lastTouchTime = currentTime;
+        }
+    }, { passive: false });
+    
     // Keyboard shortcut for zoom reset.
     document.addEventListener('keydown', function(e) {
         if (e.key === 'r' || e.key === 'R') {

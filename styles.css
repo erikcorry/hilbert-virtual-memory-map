@@ -79,6 +79,9 @@ canvas {
     cursor: crosshair;
     transition: transform 0.8s cubic-bezier(0.23, 1, 0.320, 1);
     transform-origin: center center;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 #memoryCanvas.animating {
