@@ -1,8 +1,7 @@
 # Memory Map Generator Makefile
 
-# Find all .txt files and generate corresponding .png targets
+# Find all .txt files for web server usage
 TXT_FILES := $(wildcard *.txt)
-PNG_FILES := $(TXT_FILES:.txt=.png)
 
 # Default target: show help
 default: list
@@ -15,31 +14,24 @@ node_modules: package.json
 	npm install
 	@touch node_modules
 
-# Generate all PNGs
-all: node_modules $(PNG_FILES)
+# Start web server (no PNG generation)
+all: node_modules
+	@echo "Web server mode only - no PNG files generated"
+	@echo "To start server: node index.js <input-file>"
 
-# Rule to generate PNG from TXT file
-%.png: %.txt index.js node_modules
-	node index.js $< $@
-
-# Clean generated PNG files
+# Clean dependencies
 clean:
-	rm -f *.png
-
-# Clean everything including dependencies
-clean-all: clean
 	rm -rf node_modules
 
 # Show available targets
 list:
 	@echo "Available targets:"
 	@echo "  setup     - Install Node.js dependencies (run this first on new checkout)"
-	@echo "  all       - Generate all PNG files from TXT files"
-	@echo "  clean     - Remove all generated PNG files"
-	@echo "  clean-all - Remove PNG files and node_modules"
+	@echo "  all       - Show web server usage info"
+	@echo "  clean     - Remove node_modules"
 	@echo "  list      - Show this help"
 	@echo ""
 	@echo "Input files found:"
-	@for file in $(TXT_FILES); do echo "  $$file -> $${file%.txt}.png"; done
+	@for file in $(TXT_FILES); do echo "  $$file (for web server: node index.js $$file)"; done
 
-.PHONY: default all clean clean-all list setup
+.PHONY: default all clean list setup
