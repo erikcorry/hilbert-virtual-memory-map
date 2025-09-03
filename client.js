@@ -117,7 +117,7 @@ function setStatus(message, isError = false) {
 
 async function loadSampleFile() {
     try {
-        const response = await fetch('/original-data.txt');
+        const response = await fetch('original-data.txt');
         const text = await response.text();
         document.getElementById('textEditor').value = text;
         originalTextContent = text;
