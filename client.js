@@ -537,8 +537,15 @@ document.addEventListener('DOMContentLoaded', function() {
             if (region) {
                 const size = region.end - region.start;
                 const sizeStr = formatBytes(size);
+                
+                // Calculate alignment: start with 128TB and divide by 2 until aligned
+                let alignment = 128 * 1024 * 1024 * 1024 * 1024; // 128TB in bytes
+                while (alignment > 1 && (region.start % alignment) !== 0) {
+                    alignment = Math.floor(alignment / 2);
+                }
+                const alignmentStr = formatBytes(alignment);
 
-                tooltip.innerHTML = `<span class="tooltip-close" onclick="hideTooltip()">&times;</span>${region.name}<br>0x${region.start.toString(16)} - 0x${region.end.toString(16)}<br>Size: ${sizeStr}`;
+                tooltip.innerHTML = `<span class="tooltip-close" onclick="hideTooltip()">&times;</span>${region.name}<br>0x${region.start.toString(16)} - 0x${region.end.toString(16)}<br>Size: ${sizeStr}<br>Alignment: ${alignmentStr}`;
                 tooltip.style.display = 'block';
                 tooltip.style.left = e.clientX + 'px';
                 tooltip.style.top = e.clientY + 'px';
