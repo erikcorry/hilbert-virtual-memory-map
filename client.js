@@ -15,12 +15,41 @@ function generateColorForName(name) {
         return colorMap.get(name);
     }
 
-    // Generate bright, saturated colors using HSL.
-    const hue = (colorIndex * 137.5) % 360; // Golden angle spacing.
-    const saturation = 80 + (colorIndex % 3) * 10; // 80-100% saturation.
-    const lightness = 50 + (colorIndex % 2) * 10;  // 50-60% lightness.
+    // Extract base name and permissions
+    let baseName = name;
+    let permissions = '';
+    const curlyMatch = name.match(/^(.*?)\s*\{([^}]+)\}$/);
+    if (curlyMatch) {
+        baseName = curlyMatch[1];
+        permissions = curlyMatch[2];
+    }
 
-    // Convert HSL to RGB.
+    // Generate hue based on base name
+    let hue;
+    if (colorMap.has(baseName)) {
+        // Use existing hue for this base name
+        const existingColor = colorMap.get(baseName);
+        hue = existingColor.hue;
+    } else {
+        // Generate new hue for base name
+        hue = (colorIndex * 137.5) % 360; // Golden angle spacing
+        colorIndex++;
+    }
+
+    // Calculate saturation based on permissions: start at 30%, add 10% for r, 20% for w, 40% for x
+    let saturation = 30;
+    if (permissions) {
+        if (permissions.includes('r')) saturation += 10;
+        if (permissions.includes('w')) saturation += 20;
+        if (permissions.includes('x')) saturation += 40;
+    } else {
+        // Default saturation for regions without permission suffix (original format)
+        saturation = 70;
+    }
+    
+    const lightness = 50 + (colorIndex % 2) * 10;  // 50-60% lightness
+
+    // Convert HSL to RGB
     const c = (1 - Math.abs(2 * lightness/100 - 1)) * saturation/100;
     const x = c * (1 - Math.abs((hue/60) % 2 - 1));
     const m = lightness/100 - c/2;
@@ -37,11 +66,17 @@ function generateColorForName(name) {
         r: Math.round((r + m) * 255),
         g: Math.round((g + m) * 255),
         b: Math.round((b + m) * 255),
-        a: 255
+        a: 255,
+        hue: hue  // Store hue for reuse with base name
     };
 
     colorMap.set(name, color);
-    colorIndex++;
+    
+    // Also store the base name color if it's new
+    if (!colorMap.has(baseName)) {
+        colorMap.set(baseName, color);
+    }
+    
     return color;
 }
 
@@ -86,26 +121,68 @@ function resetToOriginal() {
     setStatus('Reset to original content');
 }
 
-async function applyChanges() {
-    const textContent = document.getElementById('textEditor').value;
-    try {
-        // Parse the text content and update the memory map visualization
-        const lines = textContent.split('\n').filter(line => line.trim());
-        const tempMemoryRanges = [];
-
-        for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length >= 3) {
-                const startAddr = parseInt(parts[0], 16);
-                const endAddr = parseInt(parts[1], 16);
-                const regionName = parts.slice(2).join(' ');
-
+function parseMemoryData(textContent) {
+    const lines = textContent.split('\n').filter(line => line.trim());
+    const tempMemoryRanges = [];
+    
+    // Detect format: check if first line looks like /proc/self/maps
+    const isProcMapsFormat = lines.length > 0 && lines[0].includes('-') && lines[0].includes(' ');
+    
+    for (const line of lines) {
+        if (isProcMapsFormat) {
+            // Skip vsyscall lines
+            if (line.includes('[vsyscall]')) {
+                continue;
+            }
+            
+            // Parse /proc/self/maps format: address-range perms offset dev inode [pathname]
+            // Example: 7ffff7dd2000-7ffff7dd4000 rw-p 00000000 00:00 0 [stack]
+            const match = line.match(/^([0-9a-f]+)-([0-9a-f]+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(?:\s+(.*))?/);
+            if (match) {
+                const startAddr = parseInt(match[1], 16);
+                const endAddr = parseInt(match[2], 16);
+                const permissions = match[3];
+                let regionName = match[7] ? match[7].trim() : '';
+                
+                // Generate name for unnamed regions using bits 32-48 of start address
+                if (regionName === '') {
+                    const upperBits = Math.floor(startAddr / Math.pow(2, 32));
+                    regionName = `unnamed-${upperBits.toString(16)}`;
+                }
+                
+                // Add permission suffix in curly braces based on first 3 characters (ignore p flag)
+                const rwx = permissions.substring(0, 3);
+                regionName += ' {' + rwx + '}';
+                
                 if (!isNaN(startAddr) && !isNaN(endAddr) && endAddr > startAddr) {
                     const maxAddress = Math.pow(2, 48);
                     if (startAddr < maxAddress) {
                         const clampedEnd = Math.min(endAddr, maxAddress);
                         const color = generateColorForName(regionName);
-
+                        
+                        tempMemoryRanges.push({
+                            start: startAddr,
+                            end: clampedEnd,
+                            name: regionName,
+                            color: color
+                        });
+                    }
+                }
+            }
+        } else {
+            // Parse original format: startAddr endAddr regionName
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 3) {
+                const startAddr = parseInt(parts[0], 16);
+                const endAddr = parseInt(parts[1], 16);
+                const regionName = parts.slice(2).join(' ');
+                
+                if (!isNaN(startAddr) && !isNaN(endAddr) && endAddr > startAddr) {
+                    const maxAddress = Math.pow(2, 48);
+                    if (startAddr < maxAddress) {
+                        const clampedEnd = Math.min(endAddr, maxAddress);
+                        const color = generateColorForName(regionName);
+                        
                         tempMemoryRanges.push({
                             start: startAddr,
                             end: clampedEnd,
@@ -116,9 +193,16 @@ async function applyChanges() {
                 }
             }
         }
+    }
+    
+    return tempMemoryRanges.sort((a, b) => a.start - b.start);
+}
 
-        // Update the global regions and redraw
-        regions = tempMemoryRanges.sort((a, b) => a.start - b.start);
+async function applyChanges() {
+    const textContent = document.getElementById('textEditor').value;
+    try {
+        // Parse the text content using the unified parser
+        regions = parseMemoryData(textContent);
         updateCanvas();
         setStatus('Changes applied to visualization');
 
@@ -134,36 +218,8 @@ async function applyChanges() {
 async function loadMemoryMap() {
     const response = await fetch('/original-data');
     const textContent = await response.text();
-
-    // Parse the text content
-    const lines = textContent.split('\n').filter(line => line.trim());
-    const tempMemoryRanges = [];
-
-    for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 3) {
-            const startAddr = parseInt(parts[0], 16);
-            const endAddr = parseInt(parts[1], 16);
-            const regionName = parts.slice(2).join(' ');
-
-            if (!isNaN(startAddr) && !isNaN(endAddr) && endAddr > startAddr) {
-                const maxAddress = Math.pow(2, 48);
-                if (startAddr < maxAddress) {
-                    const clampedEnd = Math.min(endAddr, maxAddress);
-                    const color = generateColorForName(regionName);
-
-                    tempMemoryRanges.push({
-                        start: startAddr,
-                        end: clampedEnd,
-                        name: regionName,
-                        color: color
-                    });
-                }
-            }
-        }
-    }
-
-    regions = tempMemoryRanges.sort((a, b) => a.start - b.start);
+    
+    regions = parseMemoryData(textContent);
     updateCanvas();
 }
 
