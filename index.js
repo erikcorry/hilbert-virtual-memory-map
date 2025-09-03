@@ -407,7 +407,7 @@ class HilbertMemoryMap {
             return Math.floor(address / bytesPerPixel);
         }
         function xyToHilbertIndex(x, y) {
-            const n = 1024;
+            const n = 0x1000000; // 2^24 = 16777216
             let index = 0;
 
             for (let s = n >>> 1; s > 0; s = Math.floor(s / 2)) {
@@ -442,19 +442,20 @@ class HilbertMemoryMap {
             return { canvasX, canvasY, mapX, mapY };
         }
 
-        function findAddressAtPixel(canvasX, canvasY) {
-            const borderLeft = 100;
-            const borderTop = 100;
-            const mapX = canvasX - borderLeft;
-            const mapY = canvasY - borderTop;
-
+        function findAddressAtPixel(mapX, mapY) {
             if (mapX < 0 || mapX >= 1024 || mapY < 0 || mapY >= 1024) return null;
 
-            // Calculate address using current zoom range and Hilbert mapping.
-            const currentRange = zoomState.maxAddr - zoomState.minAddr;
-            const bytesPerPixel = currentRange / (1024 * 1024);
-            const hilbertIndex = xyToHilbertIndex(mapX, mapY);
-            const address = zoomState.minAddr + hilbertIndex * bytesPerPixel;
+            // Convert 1024x1024 coordinates to 2^24 coordinate system and apply zoom offsets
+            const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384 (maps 1024 pixels to 2^24 coords)
+            const levelZoomFactor = Math.pow(8, zoomState.level);
+            const actualZoomFactor = baseZoomFactor / levelZoomFactor;
+            
+            const x24 = zoomState.offsetX + mapX * actualZoomFactor;
+            const y24 = zoomState.offsetY + mapY * actualZoomFactor;
+
+            // Calculate address using 2^24 Hilbert mapping
+            const hilbertIndex24 = xyToHilbertIndex(x24, y24);
+            const address = hilbertIndex24; // Each Hilbert index maps to 1 byte in 48-bit space
 
             return address;
         }
@@ -486,7 +487,7 @@ class HilbertMemoryMap {
                     console.log(\`Single click at canvas (\${coords.canvasX}, \${coords.canvasY}) -> map (\${coords.mapX}, \${coords.mapY})\`);
                     console.log(\`Current zoom state: level=\${zoomState.level}, offsetX=\${zoomState.offsetX}, offsetY=\${zoomState.offsetY}, range=0x\${zoomState.minAddr.toString(16)} - 0x\${zoomState.maxAddr.toString(16)}\`);
 
-                    const address = findAddressAtPixel(coords.canvasX, coords.canvasY);
+                    const address = findAddressAtPixel(coords.mapX, coords.mapY);
                     console.log(\`Calculated address: 0x\${address.toString(16)}\`);
 
                     const region = findRegionFromAddress(address);
@@ -527,7 +528,7 @@ class HilbertMemoryMap {
 
                 if (coords.mapX >= 0 && coords.mapX < 1024 && coords.mapY >= 0 && coords.mapY < 1024) {
                     // Find what address was clicked.
-                    const clickedAddress = findAddressAtPixel(coords.canvasX, coords.canvasY);
+                    const clickedAddress = findAddressAtPixel(coords.mapX, coords.mapY);
                     console.log(\`Clicked address: 0x\${clickedAddress.toString(16)}\`);
 
                     // Round to nearest 64th boundaries.
