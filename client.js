@@ -745,10 +745,30 @@ function animateZoom(gridX, gridY, newZoomState) {
     const startTranslateX = gridCenterX - canvasCenterX;
     const startTranslateY = gridCenterY - canvasCenterY;
     
-    // Position initially at 100px, 100px (same as memory canvas) plus grid offset
-    animatingCanvas.style.left = '100px';
-    animatingCanvas.style.top = '100px';
-    animatingCanvas.style.transform = `translate(${startTranslateX}px, ${startTranslateY}px) scale(${startScale})`;
+    // Get the actual rendered position and size of the memory canvas
+    const memoryCanvasRect = memoryCanvas.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    
+    // Position the animating canvas at the same location as the memory canvas
+    animatingCanvas.style.left = (memoryCanvasRect.left - containerRect.left) + 'px';
+    animatingCanvas.style.top = (memoryCanvasRect.top - containerRect.top) + 'px';
+    animatingCanvas.style.width = memoryCanvasRect.width + 'px';
+    animatingCanvas.style.height = memoryCanvasRect.height + 'px';
+    
+    // Calculate scale based on actual rendered canvas size vs original 1024px
+    const actualCanvasWidth = memoryCanvasRect.width;
+    const actualGridSize = (gridSize / 1024) * actualCanvasWidth;
+    const actualStartScale = actualGridSize / actualCanvasWidth;
+    
+    // Calculate translation based on actual rendered dimensions
+    const actualGridCenterX = (gridX * actualGridSize) + (actualGridSize / 2);
+    const actualGridCenterY = (gridY * actualGridSize) + (actualGridSize / 2);
+    const actualCanvasCenterX = actualCanvasWidth / 2;
+    const actualCanvasCenterY = memoryCanvasRect.height / 2;
+    const actualStartTranslateX = actualGridCenterX - actualCanvasCenterX;
+    const actualStartTranslateY = actualGridCenterY - actualCanvasCenterY;
+    
+    animatingCanvas.style.transform = `translate(${actualStartTranslateX}px, ${actualStartTranslateY}px) scale(${actualStartScale})`;
     
     // Add to container
     container.appendChild(animatingCanvas);

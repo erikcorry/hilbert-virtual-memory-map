@@ -71,8 +71,10 @@ canvas {
 
 #memoryCanvas {
     position: absolute;
-    top: 100px;
-    left: 100px;
+    top: calc(100% * 100 / (1024 + 100 + 100));
+    left: calc(100% * 100 / (1024 + 100 + 450));
+    width: calc(100% * 1024 / (1024 + 100 + 450));
+    height: calc(100% * 1024 / (1024 + 100 + 100));
     z-index: 2;
     cursor: crosshair;
     transition: transform 0.8s cubic-bezier(0.23, 1, 0.320, 1);
