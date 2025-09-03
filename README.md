@@ -3,6 +3,12 @@
 A vibe-coded node utility that takes a list of virtual memory regions and plots them on a
 zoomable canvas in your browser.
 
+## Demo
+
+🎮 **[Try the live demo](https://erikcorry.github.io/hilbert-virtual-memory-map/)** - Features an interactive Chrome browser memory map with smooth zoom animations
+
+The demo showcases a real Chrome process memory layout captured from `/proc/pid/maps`, demonstrating how memory regions are distributed across the 48-bit virtual address space using a Hilbert curve visualization.
+
 The Hilbert curve is used to map addresses to pixels, so that any consecutive area is connected in the image.  Resolution is 1 pixel = 64Mbytes.  Tuned to the 47 bit user-space available on Linux.
 
 Understands its own format, but can also read the format of /proc/pid/maps.
