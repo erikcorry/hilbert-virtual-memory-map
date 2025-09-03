@@ -113,8 +113,10 @@ async function loadSampleFile() {
         document.getElementById('textEditor').value = text;
         originalTextContent = text;
         setStatus('Sample file loaded');
+        return true;
     } catch (error) {
         setStatus('Error loading sample file', true);
+        return false;
     }
 }
 
@@ -670,8 +672,18 @@ function resetZoom() {
     updateCanvas();
 }
 
-document.addEventListener('DOMContentLoaded', function() {
-    loadMemoryMap();
+document.addEventListener('DOMContentLoaded', async function() {
+    // Try to load sample file first
+    const sampleLoaded = await loadSampleFile();
+    
+    if (sampleLoaded) {
+        // If sample file loaded successfully, apply changes and switch to map
+        await applyChanges();
+        switchTab('map');
+    } else {
+        // If sample file failed to load, stay on text editor
+        switchTab('editor');
+    }
 
     const canvas = document.getElementById('memoryCanvas');
     const tooltip = document.getElementById('tooltip');
