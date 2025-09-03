@@ -18,137 +18,7 @@ const fs = require('fs');
 const http = require('http');
 const url = require('url');
 
-class HilbertMemoryMap {
-  constructor() {
-    this.colorMap = new Map();
-    this.colorIndex = 0;
-    this.mapWidth = 1024;
-    this.mapHeight = 1024;
-    this.borderTop = 100;
-    this.borderBottom = 100;
-    this.borderLeft = 100;
-    this.borderRight = 450; // Wider for scale key.
-    this.width = this.mapWidth + this.borderLeft + this.borderRight;
-    this.height = this.mapHeight + this.borderTop + this.borderBottom;
-    this.totalPixels = this.mapWidth * this.mapHeight; // 2,097,152 pixels.
-    this.addressSpaceBits = 48; // 48-bit virtual space.
-    this.bytesPerPixel = Math.pow(2, this.addressSpaceBits - Math.log2(this.totalPixels)); // 2^26 = 64 MiB.
-  }
-
-  formatBytes(bytes) {
-    if (bytes >= 1024 * 1024 * 1024 * 1024) {
-      return Math.round(bytes / (1024 * 1024 * 1024 * 1024)) + ' TiB';
-    } else if (bytes >= 1024 * 1024 * 1024) {
-      return Math.round(bytes / (1024 * 1024 * 1024)) + ' GiB';
-    } else if (bytes >= 1024 * 1024) {
-      return Math.round(bytes / (1024 * 1024)) + ' MiB';
-    } else if (bytes >= 1024) {
-      return Math.round(bytes / 1024) + ' KiB';
-    } else {
-      return Math.round(bytes) + ' bytes';
-    }
-  }
-
-  // Hilbert curve implementation - convert 1D index to 2D coordinates.
-  hilbertIndexToXY(index, order) {
-    const n = 1 << order;
-    let x = 0, y = 0;
-    let t = index;
-
-    for (let s = 1; s < n; s <<= 1) {
-      const rx = 1 & (t >>> 1);
-      const ry = 1 & (t ^ rx);
-
-      if (ry === 0) {
-        if (rx === 1) {
-          x = s - 1 - x;
-          y = s - 1 - y;
-        }
-        [x, y] = [y, x]; // Swap x and y.
-      }
-
-      x += s * rx;
-      y += s * ry;
-      t = Math.floor(t / 4);
-    }
-
-    return [x, y];
-  }
-  generateColorForName(name) {
-    if (this.colorMap.has(name)) {
-      return this.colorMap.get(name);
-    }
-
-    // Generate bright, saturated colors using HSL.
-    const hue = (this.colorIndex * 137.5) % 360; // Golden angle spacing.
-    const saturation = 80 + (this.colorIndex % 3) * 10; // 80-100% saturation.
-    const lightness = 50 + (this.colorIndex % 2) * 10;  // 50-60% lightness.
-
-    // Convert HSL to RGB.
-    const c = (1 - Math.abs(2 * lightness/100 - 1)) * saturation/100;
-    const x = c * (1 - Math.abs((hue/60) % 2 - 1));
-    const m = lightness/100 - c/2;
-
-    let r, g, b;
-    if (hue < 60) { r = c; g = x; b = 0; }
-    else if (hue < 120) { r = x; g = c; b = 0; }
-    else if (hue < 180) { r = 0; g = c; b = x; }
-    else if (hue < 240) { r = 0; g = x; b = c; }
-    else if (hue < 300) { r = x; g = 0; b = c; }
-    else { r = c; g = 0; b = x; }
-
-    const color = {
-      r: Math.round((r + m) * 255),
-      g: Math.round((g + m) * 255),
-      b: Math.round((b + m) * 255),
-      a: 255
-    };
-
-    this.colorMap.set(name, color);
-    this.colorIndex++;
-    return color;
-  }
-
-  parseMemoryData(textContent) {
-    const lines = textContent.split('\n').filter(line => line.trim());
-    const memoryRanges = [];
-    const maxAddress = Math.pow(2, this.addressSpaceBits);
-
-    for (const line of lines) {
-      // Parse format: startAddr endAddr regionName.
-      const parts = line.trim().split(/\s+/);
-      if (parts.length >= 3) {
-        const startAddr = parseInt(parts[0], 16);
-        const endAddr = parseInt(parts[1], 16);
-        const regionName = parts.slice(2).join(' ');
-
-        if (!isNaN(startAddr) && !isNaN(endAddr) && endAddr > startAddr) {
-          // Skip ranges that exceed address space.
-          if (startAddr >= maxAddress) {
-            continue;
-          }
-
-          // Clamp end address to stay within bounds.
-          const clampedEnd = Math.min(endAddr, maxAddress);
-          const color = this.generateColorForName(regionName);
-
-          memoryRanges.push({
-            start: startAddr,
-            end: clampedEnd,
-            name: regionName,
-            color: color
-          });
-        }
-      }
-    }
-
-    return memoryRanges.sort((a, b) => a.start - b.start);
-  }
-
-
-
-
-  startServer(inputFile, port = 8080) {
+function startServer(inputFile, port = 8080) {
     const server = http.createServer((req, res) => {
       const parsedUrl = url.parse(req.url, true);
 
@@ -162,14 +32,47 @@ class HilbertMemoryMap {
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 20px;
+            margin: 0;
+            padding: 0;
             background-color: #f5f5f5;
         }
         .container {
+            max-width: 1600px;
             margin: 0 auto;
+            background-color: white;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #ddd;
+            background-color: #f8f8f8;
+        }
+        .tab {
+            padding: 12px 24px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 16px;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s ease;
+        }
+        .tab.active {
+            background-color: white;
+            border-bottom-color: #007bff;
+            color: #007bff;
+        }
+        .tab:hover {
+            background-color: #e8e8e8;
+        }
+        .tab-content {
+            display: none;
+            padding: 20px;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .map-view {
             text-align: center;
-            overflow-x: auto;
-            position: relative;
         }
         canvas {
             border: 1px solid #ddd;
@@ -177,6 +80,39 @@ class HilbertMemoryMap {
             max-width: 100%;
             height: auto;
             cursor: crosshair;
+        }
+        .text-editor {
+            display: flex;
+            flex-direction: column;
+            height: 800px;
+        }
+        .editor-toolbar {
+            padding: 10px;
+            background-color: #f8f8f8;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .editor-toolbar button {
+            padding: 8px 16px;
+            border: 1px solid #ddd;
+            background-color: white;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .editor-toolbar button:hover {
+            background-color: #f0f0f0;
+        }
+        #textEditor {
+            flex: 1;
+            border: none;
+            outline: none;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.4;
+            resize: none;
         }
         .tooltip {
             position: absolute;
@@ -208,11 +144,32 @@ class HilbertMemoryMap {
 </head>
 <body>
     <div class="container">
-        <h1>Memory Map Visualization</h1>
-        <p>48-bit virtual address space (256 TiB) mapped to 1024x1024 using Hilbert curve</p>
-        <p><button onclick="resetZoom()">Reset Zoom</button> | Double-click grid squares to zoom in | Press 'r' to reset</p>
-        <canvas id="memoryCanvas"></canvas>
-        <div class="tooltip" id="tooltip" style="display: none;"></div>
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('editor')">Text Editor</button>
+            <button class="tab" onclick="switchTab('map')">Memory Map</button>
+        </div>
+
+        <div id="editor-tab" class="tab-content active">
+            <div class="text-editor">
+                <div class="editor-toolbar">
+                    <button onclick="loadSampleFile()">Load Sample</button>
+                    <button onclick="applyChanges()">Apply Changes</button>
+                    <button onclick="resetToOriginal()">Reset</button>
+                    <span id="status"></span>
+                </div>
+                <textarea id="textEditor" placeholder="Enter memory ranges in format: startAddr endAddr regionName"></textarea>
+            </div>
+        </div>
+
+        <div id="map-tab" class="tab-content">
+            <div class="map-view">
+                <h1>Memory Map Visualization</h1>
+                <p>48-bit virtual address space (256 TiB) mapped to 1024x1024 using Hilbert curve</p>
+                <p><button onclick="resetZoom()">Reset Zoom</button> | Double-click grid squares to zoom in | Press 'r' to reset</p>
+                <canvas id="memoryCanvas"></canvas>
+                <div class="tooltip" id="tooltip" style="display: none;"></div>
+            </div>
+        </div>
     </div>
     <script src="/client.js"></script>
 </html>`);
@@ -226,16 +183,15 @@ class HilbertMemoryMap {
           res.writeHead(500, { 'Content-Type': 'text/plain' });
           res.end('Error loading client script: ' + error.message);
         }
-      } else if (parsedUrl.pathname === '/memory-data') {
-        // Serve memory data as JSON for tooltip functionality.
+      } else if (parsedUrl.pathname === '/original-data') {
+        // Serve original input file content for text editor.
         try {
           const textContent = fs.readFileSync(inputFile, 'utf8');
-          const memoryRanges = this.parseMemoryData(textContent);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(memoryRanges));
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end(textContent);
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'text/plain' });
-          res.end('Error loading memory data: ' + error.message);
+          res.end('Error loading original data: ' + error.message);
         }
       } else {
         // 404 for other paths.
@@ -249,7 +205,6 @@ class HilbertMemoryMap {
     });
 
     return server;
-  }
 }
 
 // CLI interface.
@@ -299,12 +254,11 @@ function main() {
     process.exit(1);
   }
 
-  const generator = new HilbertMemoryMap();
-  generator.startServer(inputFile, port);
+  startServer(inputFile, port);
 }
 
 if (require.main === module) {
   main();
 }
 
-module.exports = HilbertMemoryMap;
+module.exports = { startServer };

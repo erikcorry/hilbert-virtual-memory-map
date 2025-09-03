@@ -1,4 +1,7 @@
 let regions = [];
+let originalTextContent = '';
+let colorMap = new Map();
+let colorIndex = 0;
 let zoomState = {
     level: 0,                      // Current zoom level (0 = full view).
     minAddr: 0,                    // Lowest address in current view.
@@ -7,16 +10,167 @@ let zoomState = {
     offsetY: 0                    // Y offset in 2^24 coordinate system.
 };
 
+function generateColorForName(name) {
+    if (colorMap.has(name)) {
+        return colorMap.get(name);
+    }
+
+    // Generate bright, saturated colors using HSL.
+    const hue = (colorIndex * 137.5) % 360; // Golden angle spacing.
+    const saturation = 80 + (colorIndex % 3) * 10; // 80-100% saturation.
+    const lightness = 50 + (colorIndex % 2) * 10;  // 50-60% lightness.
+
+    // Convert HSL to RGB.
+    const c = (1 - Math.abs(2 * lightness/100 - 1)) * saturation/100;
+    const x = c * (1 - Math.abs((hue/60) % 2 - 1));
+    const m = lightness/100 - c/2;
+
+    let r, g, b;
+    if (hue < 60) { r = c; g = x; b = 0; }
+    else if (hue < 120) { r = x; g = c; b = 0; }
+    else if (hue < 180) { r = 0; g = c; b = x; }
+    else if (hue < 240) { r = 0; g = x; b = c; }
+    else if (hue < 300) { r = x; g = 0; b = c; }
+    else { r = c; g = 0; b = x; }
+
+    const color = {
+        r: Math.round((r + m) * 255),
+        g: Math.round((g + m) * 255),
+        b: Math.round((b + m) * 255),
+        a: 255
+    };
+
+    colorMap.set(name, color);
+    colorIndex++;
+    return color;
+}
+
+function switchTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+    // Show selected tab
+    if (tabName === 'editor') {
+        document.querySelector('.tab:first-child').classList.add('active');
+        document.getElementById('editor-tab').classList.add('active');
+    } else if (tabName === 'map') {
+        document.querySelector('.tab:last-child').classList.add('active');
+        document.getElementById('map-tab').classList.add('active');
+    }
+}
+
+function setStatus(message, isError = false) {
+    const statusEl = document.getElementById('status');
+    statusEl.textContent = message;
+    statusEl.style.color = isError ? '#d32f2f' : '#2e7d32';
+    setTimeout(() => {
+        statusEl.textContent = '';
+    }, 3000);
+}
+
+async function loadSampleFile() {
+    try {
+        const response = await fetch('/original-data');
+        const text = await response.text();
+        document.getElementById('textEditor').value = text;
+        originalTextContent = text;
+        setStatus('Sample file loaded');
+    } catch (error) {
+        setStatus('Error loading sample file', true);
+    }
+}
+
+function resetToOriginal() {
+    document.getElementById('textEditor').value = originalTextContent;
+    setStatus('Reset to original content');
+}
+
+async function applyChanges() {
+    const textContent = document.getElementById('textEditor').value;
+    try {
+        // Parse the text content and update the memory map visualization
+        const lines = textContent.split('\n').filter(line => line.trim());
+        const tempMemoryRanges = [];
+
+        for (const line of lines) {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 3) {
+                const startAddr = parseInt(parts[0], 16);
+                const endAddr = parseInt(parts[1], 16);
+                const regionName = parts.slice(2).join(' ');
+
+                if (!isNaN(startAddr) && !isNaN(endAddr) && endAddr > startAddr) {
+                    const maxAddress = Math.pow(2, 48);
+                    if (startAddr < maxAddress) {
+                        const clampedEnd = Math.min(endAddr, maxAddress);
+                        const color = generateColorForName(regionName);
+
+                        tempMemoryRanges.push({
+                            start: startAddr,
+                            end: clampedEnd,
+                            name: regionName,
+                            color: color
+                        });
+                    }
+                }
+            }
+        }
+
+        // Update the global regions and redraw
+        regions = tempMemoryRanges.sort((a, b) => a.start - b.start);
+        updateCanvas();
+        setStatus('Changes applied to visualization');
+
+        // Auto-switch to map tab to show results
+        switchTab('map');
+
+    } catch (error) {
+        console.error('Error parsing changes:', error);
+        setStatus('Error parsing text content', true);
+    }
+}
+
 async function loadMemoryMap() {
-    const response = await fetch('/memory-data');
-    regions = await response.json();
+    const response = await fetch('/original-data');
+    const textContent = await response.text();
+
+    // Parse the text content
+    const lines = textContent.split('\n').filter(line => line.trim());
+    const tempMemoryRanges = [];
+
+    for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 3) {
+            const startAddr = parseInt(parts[0], 16);
+            const endAddr = parseInt(parts[1], 16);
+            const regionName = parts.slice(2).join(' ');
+
+            if (!isNaN(startAddr) && !isNaN(endAddr) && endAddr > startAddr) {
+                const maxAddress = Math.pow(2, 48);
+                if (startAddr < maxAddress) {
+                    const clampedEnd = Math.min(endAddr, maxAddress);
+                    const color = generateColorForName(regionName);
+
+                    tempMemoryRanges.push({
+                        start: startAddr,
+                        end: clampedEnd,
+                        name: regionName,
+                        color: color
+                    });
+                }
+            }
+        }
+    }
+
+    regions = tempMemoryRanges.sort((a, b) => a.start - b.start);
     updateCanvas();
 }
 
 function updateCanvas() {
     const canvas = document.getElementById('memoryCanvas');
     const ctx = canvas.getContext('2d');
-    
+
     // Set canvas size
     const mapWidth = 1024;
     const mapHeight = 1024;
@@ -26,7 +180,7 @@ function updateCanvas() {
     const borderRight = 450;
     canvas.width = mapWidth + borderLeft + borderRight;
     canvas.height = mapHeight + borderTop + borderBottom;
-    
+
     drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
 }
 
@@ -98,7 +252,7 @@ function findAddressAtPixel(mapX, mapY) {
     const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384 (maps 1024 pixels to 2^24 coords)
     const levelZoomFactor = Math.pow(8, zoomState.level);
     const actualZoomFactor = baseZoomFactor / levelZoomFactor;
-    
+
     const x24 = zoomState.offsetX + mapX * actualZoomFactor;
     const y24 = zoomState.offsetY + mapY * actualZoomFactor;
 
@@ -155,7 +309,7 @@ function drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRi
     }
 
     // Filter ranges to only those that overlap with current view
-    const visibleRanges = regions.filter(range => 
+    const visibleRanges = regions.filter(range =>
         range.end > minAddr && range.start < maxAddr
     );
 
@@ -166,26 +320,26 @@ function drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRi
     // Process each visible memory range
     visibleRanges.forEach(range => {
         const { r, g, b, a } = range.color;
-        
+
         // Calculate pixel range for this memory range in current view
         const startAddr = Math.max(range.start, minAddr);
         const endAddr = Math.min(range.end, maxAddr);
-        
+
         // Fill pixels for this memory range
         for (let address = startAddr; address < endAddr; address += bytesPerPixel) {
             // Get coordinates in 2^24 coordinate system
             const order = 24;
             const [x24, y24] = hilbertIndexToXY(address, order);
-            
+
             // Scale from 2^24 to 1024 and apply offset
             const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384
             const levelZoomFactor = Math.pow(8, zoomState.level);
             const actualZoomFactor = baseZoomFactor / levelZoomFactor;
-            
+
             const scaledX = Math.floor((x24 - zoomState.offsetX) / actualZoomFactor);
             const scaledY = Math.floor((y24 - zoomState.offsetY) / actualZoomFactor);
-            
-            if (scaledX >= 0 && scaledX < mapWidth && 
+
+            if (scaledX >= 0 && scaledX < mapWidth &&
                 scaledY >= 0 && scaledY < mapHeight) {
                 const canvasX = scaledX + borderLeft;
                 const canvasY = scaledY + borderTop;
@@ -243,7 +397,7 @@ function drawScaleKey(ctx, mapWidth, borderLeft, borderTop, borderRight, level, 
 
     // Memory range above Scale
     ctx.fillText(`0x${minAddr.toString(16)} - 0x${maxAddr.toString(16)}`, keyX, keyY - 20);
-    
+
     // Title
     ctx.fillText('Scale:', keyX, keyY);
 
@@ -278,14 +432,14 @@ function drawScaleKey(ctx, mapWidth, borderLeft, borderTop, borderRight, level, 
 
     // Additional info
     ctx.font = '12px Arial';
-    
+
     // Each dotted square is 128x128 pixels
     const squareSize = 128;
     const bytesPerSquare = bytesPerPixel * squareSize * squareSize;
-    
+
     ctx.fillText(`Each pixel = ${formatBytes(bytesPerPixel)}`, keyX, keyY + yOffset + 20);
     ctx.fillText(`Each square = ${formatBytes(bytesPerSquare)}`, keyX, keyY + yOffset + 40);
-    
+
     if (level > 0) {
         const currentRange = maxAddr - minAddr;
         ctx.fillText(`Zoomed view = ${formatBytes(currentRange)}`, keyX, keyY + yOffset + 60);
@@ -343,7 +497,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const coords = getMapCoordinates(e, canvas);
 
         const maxZoomLevel = 4;
-        
+
         if (zoomState.level >= maxZoomLevel) {
             return;
         }
