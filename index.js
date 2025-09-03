@@ -42,6 +42,16 @@ function startServer(inputFile, port = 8080) {
           res.writeHead(500, { 'Content-Type': 'text/plain' });
           res.end('Error loading client script: ' + error.message);
         }
+      } else if (parsedUrl.pathname === '/styles.css') {
+        // Serve CSS stylesheet.
+        try {
+          const cssContent = fs.readFileSync('styles.css', 'utf8');
+          res.writeHead(200, { 'Content-Type': 'text/css' });
+          res.end(cssContent);
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Error loading stylesheet: ' + error.message);
+        }
       } else if (parsedUrl.pathname === '/original-data') {
         // Serve original input file content for text editor.
         try {
