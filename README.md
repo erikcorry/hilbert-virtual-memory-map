@@ -11,7 +11,7 @@ For example, use 'top' to find an active Chrome process then start the server on
 localhost:8080 with:
 
 ```
-make install
+make setup
 node index.js /proc/123/maps
 ```
 
