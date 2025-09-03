@@ -62,7 +62,7 @@ function startServer(inputFile, port = 8080) {
           res.writeHead(404, { 'Content-Type': 'text/plain' });
           res.end('Favicon not found');
         }
-      } else if (parsedUrl.pathname === '/original-data') {
+      } else if (parsedUrl.pathname === '/original-data.txt') {
         // Serve original input file content for text editor.
         try {
           const textContent = fs.readFileSync(inputFile, 'utf8');
