@@ -384,8 +384,6 @@ function getMapCoordinates(e, canvas) {
 }
 
 function findAddressAtPixel(mapX, mapY) {
-    if (mapX < 0 || mapX >= 1024 || mapY < 0 || mapY >= 1024) return null;
-
     // Convert 1024x1024 coordinates to 2^24 coordinate system and apply zoom offsets
     const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384 (maps 1024 pixels to 2^24 coords)
     const levelZoomFactor = Math.pow(8, zoomState.level);
@@ -393,6 +391,10 @@ function findAddressAtPixel(mapX, mapY) {
 
     const x24 = zoomState.offsetX + mapX * actualZoomFactor;
     const y24 = zoomState.offsetY + mapY * actualZoomFactor;
+
+    // Check bounds in the 2^24 coordinate system
+    const maxCoord24 = Math.pow(2, 24) - 1;
+    if (x24 < 0 || x24 > maxCoord24 || y24 < 0 || y24 > maxCoord24) return null;
 
     // Calculate address using 2^24 Hilbert mapping
     const hilbertIndex24 = xyToHilbertIndex(x24, y24);
@@ -434,11 +436,11 @@ function drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRi
     const addressRange = maxAddr - minAddr;
     const bytesPerPixel = addressRange / totalPixels;
 
-    // White background
-    ctx.fillStyle = '#ffffff';
+    // Light gray background for entire canvas
+    ctx.fillStyle = '#C0C0C0';
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // Black area for the memory map
+    // Black background for the actual map area
     ctx.fillStyle = '#000000';
     ctx.fillRect(borderLeft, borderTop, mapWidth, mapHeight);
 
@@ -499,28 +501,100 @@ function drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRi
 }
 
 function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLevel) {
-    // Set up dotted line style
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; // Brighter white
-    ctx.lineWidth = 1;
-    ctx.setLineDash([2, 4]); // Dotted pattern
-
-    // 4TB = 16384 pixels = 128x128 square in Hilbert space (4TB / 256MB = 16384)
-    const tbSize = 128; // sqrt(16384) = 128
-
-    // Draw grid lines every 128 pixels in both directions
-    ctx.beginPath();
-
-    for (let i = tbSize; i < 1024; i += tbSize) {
-        // Vertical lines
-        ctx.moveTo(borderLeft + i, borderTop);
-        ctx.lineTo(borderLeft + i, borderTop + 1024);
-        // Horizontal lines
-        ctx.moveTo(borderLeft, borderTop + i);
-        ctx.lineTo(borderLeft + 1024, borderTop + i);
+    const tbSize = 128; // 128x128 pixel squares
+    
+    // Helper function to check if two adjacent squares are adjacent in memory
+    function areSquaresAdjacentInMemory(x1, y1, x2, y2) {
+        // Get center points of both squares
+        const centerX1 = x1 + tbSize / 2;
+        const centerY1 = y1 + tbSize / 2;
+        const centerX2 = x2 + tbSize / 2;
+        const centerY2 = y2 + tbSize / 2;
+        
+        // Find addresses at center of each square
+        const addr1 = findAddressAtPixel(centerX1, centerY1);
+        const addr2 = findAddressAtPixel(centerX2, centerY2);
+        
+        if (addr1 === null || addr2 === null) {
+            return true; // Default to light if we can't determine
+        }
+        
+        // Calculate the memory size of one 128x128 square
+        const { minAddr, maxAddr } = zoomState;
+        const bytesPerPixel = (maxAddr - minAddr) / (mapWidth * mapHeight);
+        const bytesPerSquare = bytesPerPixel * tbSize * tbSize;
+        
+        // Round addresses down to square boundaries
+        const roundedAddr1 = Math.floor(addr1 / bytesPerSquare) * bytesPerSquare;
+        const roundedAddr2 = Math.floor(addr2 / bytesPerSquare) * bytesPerSquare;
+        
+        // Check if the rounded addresses are exactly one square apart
+        const addressDiff = Math.abs(roundedAddr1 - roundedAddr2);
+        const isAdjacent = addressDiff === bytesPerSquare;
+        
+        
+        return isAdjacent;
     }
-
-    ctx.stroke();
-
+    
+    // Set up basic line style
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    
+    // Draw vertical lines
+    for (let i = 0; i <= 1024; i += tbSize) {
+        // Check each segment of the vertical line
+        for (let j = 0; j < 1024; j += tbSize) {
+            const leftSquareX = i - tbSize;
+            const rightSquareX = i;
+            const squareY = j;
+            
+            // Check if squares on left and right of this line are adjacent in memory
+            const isAdjacent = areSquaresAdjacentInMemory(leftSquareX, squareY, rightSquareX, squareY);
+            
+            // Set up style for this segment
+            if (isAdjacent) {
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 4]); // Dotted pattern - squares ARE adjacent
+            } else {
+                ctx.lineWidth = 3;
+                ctx.setLineDash([]); // Solid line - squares are NOT adjacent
+            }
+            
+            // Draw this segment
+            ctx.beginPath();
+            ctx.moveTo(borderLeft + i, borderTop + j);
+            ctx.lineTo(borderLeft + i, borderTop + j + tbSize);
+            ctx.stroke();
+        }
+    }
+    
+    // Draw horizontal lines
+    for (let i = 0; i <= 1024; i += tbSize) {
+        // Check each segment of the horizontal line
+        for (let j = 0; j < 1024; j += tbSize) {
+            const squareX = j;
+            const topSquareY = i - tbSize;
+            const bottomSquareY = i;
+            
+            // Check if squares above and below this line are adjacent in memory
+            const isAdjacent = areSquaresAdjacentInMemory(squareX, topSquareY, squareX, bottomSquareY);
+            
+            // Set up style for this segment
+            if (isAdjacent) {
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 4]); // Dotted pattern - squares ARE adjacent
+            } else {
+                ctx.lineWidth = 3;
+                ctx.setLineDash([]); // Solid line - squares are NOT adjacent
+            }
+            
+            // Draw this segment
+            ctx.beginPath();
+            ctx.moveTo(borderLeft + j, borderTop + i);
+            ctx.lineTo(borderLeft + j + tbSize, borderTop + i);
+            ctx.stroke();
+        }
+    }
+    
     // Reset line dash for other drawing
     ctx.setLineDash([]);
 }
