@@ -12,6 +12,15 @@ let zoomState = {
     offsetY: 0                    // Y offset in 2^24 coordinate system.
 };
 
+let animationState = {
+    isAnimating: false,           // Whether we're currently animating
+    animationId: null,            // requestAnimationFrame ID
+    startTime: null,              // Animation start timestamp
+    duration: 800,                // Animation duration in ms (matches CSS transition)
+    fromTransform: null,          // Starting transform state
+    toTransform: null             // Target transform state  
+};
+
 function generateColorForName(name) {
     if (colorMap.has(name)) {
         return colorMap.get(name);
@@ -139,15 +148,13 @@ function applyShading(region) {
     const ctx = canvas.getContext('2d');
     const mapWidth = 1024;
     const mapHeight = 1024;
-    const borderLeft = 100;
-    const borderTop = 100;
     
     // Store original canvas data
     originalCanvasData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     highlightedRegion = region;
     
-    // Get image data for the map area
-    const imageData = ctx.getImageData(borderLeft, borderTop, mapWidth, mapHeight);
+    // Get image data for the entire memory canvas
+    const imageData = ctx.getImageData(0, 0, mapWidth, mapHeight);
     const data = imageData.data;
     
     // Calculate visible address range for current zoom
@@ -185,7 +192,7 @@ function applyShading(region) {
     }
     
     // Put the modified image data back
-    ctx.putImageData(imageData, borderLeft, borderTop);
+    ctx.putImageData(imageData, 0, 0);
 }
 
 function removeShading() {
@@ -304,24 +311,32 @@ async function loadMemoryMap() {
 }
 
 function updateCanvas() {
-    const canvas = document.getElementById('memoryCanvas');
-    const ctx = canvas.getContext('2d');
-
     // Clear any existing shading
     originalCanvasData = null;
     highlightedRegion = null;
 
-    // Set canvas size
+    // Set canvas sizes
     const mapWidth = 1024;
     const mapHeight = 1024;
     const borderTop = 100;
     const borderBottom = 100;
     const borderLeft = 100;
     const borderRight = 450;
-    canvas.width = mapWidth + borderLeft + borderRight;
-    canvas.height = mapHeight + borderTop + borderBottom;
+    
+    // Background canvas (borders, legend, grid)
+    const backgroundCanvas = document.getElementById('backgroundCanvas');
+    const backgroundCtx = backgroundCanvas.getContext('2d');
+    backgroundCanvas.width = mapWidth + borderLeft + borderRight;
+    backgroundCanvas.height = mapHeight + borderTop + borderBottom;
+    
+    // Memory map canvas (just the 1024x1024 memory data)
+    const memoryCanvas = document.getElementById('memoryCanvas');
+    const memoryCtx = memoryCanvas.getContext('2d');
+    memoryCanvas.width = mapWidth;
+    memoryCanvas.height = mapHeight;
 
-    drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+    drawBackground(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+    drawMemoryData(memoryCtx, mapWidth, mapHeight);
 }
 
 function xyToHilbertIndex(x, y) {
@@ -370,19 +385,14 @@ function hilbertIndexToXY(index, order) {
     return [x, y];
 }
 
-function getMapCoordinates(e, canvas) {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const canvasX = Math.floor((e.clientX - rect.left) * scaleX);
-    const canvasY = Math.floor((e.clientY - rect.top) * scaleY);
+function getMapCoordinates(e, memoryCanvas) {
+    const rect = memoryCanvas.getBoundingClientRect();
+    const scaleX = memoryCanvas.width / rect.width;
+    const scaleY = memoryCanvas.height / rect.height;
+    const mapX = Math.floor((e.clientX - rect.left) * scaleX);
+    const mapY = Math.floor((e.clientY - rect.top) * scaleY);
 
-    const borderLeft = 100;
-    const borderTop = 100;
-    const mapX = canvasX - borderLeft;
-    const mapY = canvasY - borderTop;
-
-    return { canvasX, canvasY, mapX, mapY };
+    return { canvasX: mapX, canvasY: mapY, mapX, mapY };
 }
 
 function findAddressAtPixel(mapX, mapY) {
@@ -431,12 +441,11 @@ function formatBytes(bytes) {
     }
 }
 
-function drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRight) {
-    const totalPixels = mapWidth * mapHeight;
+function drawBackground(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRight) {
     const minAddr = zoomState.minAddr;
     const maxAddr = zoomState.maxAddr;
     const addressRange = maxAddr - minAddr;
-    const bytesPerPixel = addressRange / totalPixels;
+    const bytesPerPixel = addressRange / (mapWidth * mapHeight);
 
     // Light gray background for entire canvas
     ctx.fillStyle = '#C0C0C0';
@@ -445,6 +454,21 @@ function drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRi
     // Black background for the actual map area
     ctx.fillStyle = '#000000';
     ctx.fillRect(borderLeft, borderTop, mapWidth, mapHeight);
+
+    // Draw scale key (but not grid lines - those go on memory canvas)
+    drawScaleKey(ctx, mapWidth, borderLeft, borderTop, borderRight, zoomState.level, bytesPerPixel, minAddr, maxAddr);
+}
+
+function drawMemoryData(ctx, mapWidth, mapHeight) {
+    const totalPixels = mapWidth * mapHeight;
+    const minAddr = zoomState.minAddr;
+    const maxAddr = zoomState.maxAddr;
+    const addressRange = maxAddr - minAddr;
+    const bytesPerPixel = addressRange / totalPixels;
+
+    // Black background for the memory canvas
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, mapWidth, mapHeight);
 
     if (regions.length === 0) {
         return;
@@ -455,8 +479,8 @@ function drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRi
         range.end > minAddr && range.start < maxAddr
     );
 
-    // Create image data for the entire canvas
-    const imageData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+    // Create image data for the memory canvas
+    const imageData = ctx.getImageData(0, 0, mapWidth, mapHeight);
     const data = imageData.data;
 
     // Process each visible memory range
@@ -483,9 +507,7 @@ function drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRi
 
             if (scaledX >= 0 && scaledX < mapWidth &&
                 scaledY >= 0 && scaledY < mapHeight) {
-                const canvasX = scaledX + borderLeft;
-                const canvasY = scaledY + borderTop;
-                const dataIndex = (canvasY * ctx.canvas.width + canvasX) * 4;
+                const dataIndex = (scaledY * mapWidth + scaledX) * 4;
                 data[dataIndex] = r;     // Red
                 data[dataIndex + 1] = g; // Green
                 data[dataIndex + 2] = b; // Blue
@@ -496,10 +518,9 @@ function drawMemoryMap(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRi
 
     // Apply the image data to canvas
     ctx.putImageData(imageData, 0, 0);
-
-    // Draw grid lines and scale key
-    drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomState.level);
-    drawScaleKey(ctx, mapWidth, borderLeft, borderTop, borderRight, zoomState.level, bytesPerPixel, minAddr, maxAddr);
+    
+    // Draw grid lines on top of the memory data
+    drawGridLines(ctx, mapWidth, mapHeight, 0, 0, zoomState.level);
 }
 
 function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLevel) {
@@ -516,10 +537,10 @@ function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLeve
             ctx.setLineDash([]); // Solid line - squares are NOT adjacent
         }
         
-        // Draw the segment with border adjustment
+        // Draw the segment (no border adjustment needed for memory canvas)
         ctx.beginPath();
-        ctx.moveTo(borderLeft + startX, borderTop + startY);
-        ctx.lineTo(borderLeft + endX, borderTop + endY);
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
         ctx.stroke();
     }
     
@@ -669,7 +690,100 @@ function resetZoom() {
     zoomState.offsetX = 0;
     zoomState.offsetY = 0;
     hideTooltip();
+    
+    // Reset memory canvas transform and update
+    const memoryCanvas = document.getElementById('memoryCanvas');
+    memoryCanvas.style.transform = '';
     updateCanvas();
+}
+
+function animateZoom(gridX, gridY, newZoomState) {
+    if (animationState.isAnimating) {
+        return; // Already animating
+    }
+    
+    const memoryCanvas = document.getElementById('memoryCanvas');
+    const container = document.querySelector('.canvas-container');
+    
+    // Add animating class to disable interactions
+    memoryCanvas.classList.add('animating');
+    
+    // Create off-screen canvas with new zoomed content
+    const offScreenCanvas = document.createElement('canvas');
+    offScreenCanvas.width = 1024;
+    offScreenCanvas.height = 1024;
+    const offScreenCtx = offScreenCanvas.getContext('2d');
+    
+    // Render new zoomed content to off-screen canvas
+    const oldZoomState = { ...zoomState };
+    Object.assign(zoomState, newZoomState);
+    drawMemoryData(offScreenCtx, 1024, 1024);
+    
+    // Create DOM element from off-screen canvas and position it
+    const animatingCanvas = document.createElement('canvas');
+    animatingCanvas.width = 1024;
+    animatingCanvas.height = 1024;
+    animatingCanvas.style.position = 'absolute';
+    animatingCanvas.style.zIndex = '3'; // Above the memory canvas
+    animatingCanvas.style.pointerEvents = 'none';
+    animatingCanvas.style.transition = 'transform 0.8s cubic-bezier(0.23, 1, 0.320, 1)';
+    animatingCanvas.style.transformOrigin = 'center center';
+    
+    // Copy the off-screen content to the animating canvas
+    const animatingCtx = animatingCanvas.getContext('2d');
+    animatingCtx.drawImage(offScreenCanvas, 0, 0);
+    
+    // Calculate positions
+    const gridSize = 128;
+    const gridCenterX = (gridX * gridSize) + (gridSize / 2);
+    const gridCenterY = (gridY * gridSize) + (gridSize / 2);
+    const canvasCenterX = 512;
+    const canvasCenterY = 512;
+    
+    // Position at grid square center with small scale
+    const startScale = gridSize / 1024; // 1/8 scale
+    const startTranslateX = gridCenterX - canvasCenterX;
+    const startTranslateY = gridCenterY - canvasCenterY;
+    
+    // Position initially at 100px, 100px (same as memory canvas) plus grid offset
+    animatingCanvas.style.left = '100px';
+    animatingCanvas.style.top = '100px';
+    animatingCanvas.style.transform = `translate(${startTranslateX}px, ${startTranslateY}px) scale(${startScale})`;
+    
+    // Add to container
+    container.appendChild(animatingCanvas);
+    
+    // Set animation state
+    animationState.isAnimating = true;
+    animationState.startTime = performance.now();
+    
+    // Start animation to full size
+    setTimeout(() => {
+        animatingCanvas.style.transform = '';
+        
+        // After animation completes, update main canvas and remove animating canvas
+        setTimeout(() => {
+            // Update the main memory canvas with new content
+            const mainCtx = memoryCanvas.getContext('2d');
+            mainCtx.drawImage(offScreenCanvas, 0, 0);
+            
+            // Update the background canvas (legend/scale key) with new zoom state
+            const backgroundCanvas = document.getElementById('backgroundCanvas');
+            const backgroundCtx = backgroundCanvas.getContext('2d');
+            const mapWidth = 1024;
+            const mapHeight = 1024;
+            const borderLeft = 100;
+            const borderTop = 100;
+            const borderRight = 450;
+            
+            drawBackground(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+            
+            // Clean up
+            container.removeChild(animatingCanvas);
+            animationState.isAnimating = false;
+            memoryCanvas.classList.remove('animating');
+        }, animationState.duration);
+    }, 50);
 }
 
 document.addEventListener('DOMContentLoaded', async function() {
@@ -691,6 +805,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     let clickTimeout;
 
     canvas.addEventListener('click', function(e) {
+        // Don't handle clicks during animation
+        if (animationState.isAnimating) {
+            return;
+        }
+        
         clearTimeout(clickTimeout);
         clickTimeout = setTimeout(function() {
             const coords = getMapCoordinates(e, canvas);
@@ -723,6 +842,12 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     canvas.addEventListener('dblclick', function(e) {
         clearTimeout(clickTimeout); // Cancel single-click.
+        
+        // Don't zoom if already animating
+        if (animationState.isAnimating) {
+            return;
+        }
+        
         const coords = getMapCoordinates(e, canvas);
 
         const maxZoomLevel = 4;
@@ -756,34 +881,29 @@ document.addEventListener('DOMContentLoaded', async function() {
             const newOffsetX = zoomState.offsetX + gridX * pixelsPerGrid * actualZoomFactor;
             const newOffsetY = zoomState.offsetY + gridY * pixelsPerGrid * actualZoomFactor;
 
-            // Update zoom state.
-            zoomState.level++;
-            zoomState.minAddr = gridStartAddr;
-            zoomState.maxAddr = gridEndAddr;
-            zoomState.offsetX = newOffsetX;
-            zoomState.offsetY = newOffsetY;
+            // Prepare new zoom state
+            const newZoomState = {
+                level: zoomState.level + 1,
+                minAddr: gridStartAddr,
+                maxAddr: gridEndAddr,
+                offsetX: newOffsetX,
+                offsetY: newOffsetY
+            };
 
             hideTooltip();
-            updateCanvas();
+            
+            // Trigger animated zoom instead of immediate update
+            animateZoom(gridX, gridY, newZoomState);
         }
     });
 
     // Click outside map area to dismiss.
     document.addEventListener('click', function(e) {
-        const canvas = document.getElementById('memoryCanvas');
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        const x = (e.clientX - rect.left) * scaleX;
-        const y = (e.clientY - rect.top) * scaleY;
-
-        const borderLeft = 100;
-        const borderTop = 100;
-        const mapX = x - borderLeft;
-        const mapY = y - borderTop;
-
-        // If click is outside the 1024x1024 map area or outside canvas entirely.
-        if (e.target !== canvas || mapX < 0 || mapX >= 1024 || mapY < 0 || mapY >= 1024) {
+        const memoryCanvas = document.getElementById('memoryCanvas');
+        const backgroundCanvas = document.getElementById('backgroundCanvas');
+        
+        // If click is outside both canvases entirely
+        if (e.target !== memoryCanvas && e.target !== backgroundCanvas) {
             hideTooltip();
         }
     });

@@ -74,12 +74,33 @@ function startServer(inputFile, port = 8080) {
         .map-view {
             text-align: center;
         }
-        canvas {
+        .canvas-container {
+            position: relative;
+            display: inline-block;
             border: 1px solid #ddd;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        canvas {
+            display: block;
             max-width: 100%;
             height: auto;
+        }
+        #backgroundCanvas {
+            position: relative;
+            z-index: 1;
+        }
+        #memoryCanvas {
+            position: absolute;
+            top: 100px;
+            left: 100px;
+            z-index: 2;
             cursor: crosshair;
+            transition: transform 0.8s cubic-bezier(0.23, 1, 0.320, 1);
+            transform-origin: center center;
+        }
+        #memoryCanvas.animating {
+            cursor: wait;
+            pointer-events: none;
         }
         .text-editor {
             display: flex;
@@ -166,7 +187,10 @@ function startServer(inputFile, port = 8080) {
                 <h1>Memory Map Visualization</h1>
                 <p>48-bit virtual address space (256 TiB) mapped to 1024x1024 using Hilbert curve</p>
                 <p><button onclick="resetZoom()">Reset Zoom</button> | Double-click grid squares to zoom in | Press 'r' to reset</p>
-                <canvas id="memoryCanvas"></canvas>
+                <div class="canvas-container">
+                    <canvas id="backgroundCanvas"></canvas>
+                    <canvas id="memoryCanvas"></canvas>
+                </div>
                 <div class="tooltip" id="tooltip" style="display: none;"></div>
             </div>
         </div>
