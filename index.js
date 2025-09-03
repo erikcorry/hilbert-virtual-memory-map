@@ -28,7 +28,7 @@ class HilbertMemoryMap {
     this.borderTop = 100;
     this.borderBottom = 100;
     this.borderLeft = 100;
-    this.borderRight = 400; // Wider for scale key.
+    this.borderRight = 450; // Wider for scale key.
     this.width = this.mapWidth + this.borderLeft + this.borderRight;
     this.height = this.mapHeight + this.borderTop + this.borderBottom;
     this.totalPixels = this.mapWidth * this.mapHeight; // 2,097,152 pixels.
@@ -36,10 +36,18 @@ class HilbertMemoryMap {
     this.bytesPerPixel = Math.pow(2, this.addressSpaceBits - Math.log2(this.totalPixels)); // 2^26 = 64 MiB.
   }
 
-  // Convert address to pixel index using the virtual address space.
-  addressToPixelIndex(address) {
-    const pixelIndex = Math.floor(address / this.bytesPerPixel);
-    return Math.min(pixelIndex, this.totalPixels - 1);
+  formatBytes(bytes) {
+    if (bytes >= 1024 * 1024 * 1024 * 1024) {
+      return Math.round(bytes / (1024 * 1024 * 1024 * 1024)) + ' TiB';
+    } else if (bytes >= 1024 * 1024 * 1024) {
+      return Math.round(bytes / (1024 * 1024 * 1024)) + ' GiB';
+    } else if (bytes >= 1024 * 1024) {
+      return Math.round(bytes / (1024 * 1024)) + ' MiB';
+    } else if (bytes >= 1024) {
+      return Math.round(bytes / 1024) + ' KiB';
+    } else {
+      return Math.round(bytes) + ' bytes';
+    }
   }
 
   // Hilbert curve implementation - convert 1D index to 2D coordinates.
@@ -216,7 +224,7 @@ class HilbertMemoryMap {
     this.drawGridLines(ctx, level);
 
     // Draw scale key.
-    this.drawScaleKey(ctx, level, bytesPerPixel);
+    this.drawScaleKey(ctx, level, bytesPerPixel, minAddr, maxAddr);
 
     return canvas;
   }
@@ -248,7 +256,7 @@ class HilbertMemoryMap {
     ctx.setLineDash([]);
   }
 
-  drawScaleKey(ctx, level, bytesPerPixel) {
+  drawScaleKey(ctx, level, bytesPerPixel, minAddr, maxAddr) {
     const keyX = this.borderLeft + this.mapWidth + 50;
     const keyY = this.borderTop + 100;
 
@@ -256,16 +264,22 @@ class HilbertMemoryMap {
     ctx.fillStyle = '#000000';
     ctx.font = '16px Arial';
 
+    // Memory range above Scale
+    ctx.fillText(`0x${minAddr.toString(16)} - 0x${maxAddr.toString(16)}`, keyX, keyY - 20);
+
     // Title.
     ctx.fillText('Scale:', keyX, keyY);
 
-    // Show round sizes between 1 pixel and 128x128 pixels.
+    // Show useful sizes starting from 4KiB.
     const sizes = [
-      { bytes: 1, name: '1 byte' },
-      { bytes: 1024, name: '1 KiB' },
+      { bytes: 4 * 1024, name: '4 KiB' },
+      { bytes: 64 * 1024, name: '64 KiB' },
       { bytes: 1024 * 1024, name: '1 MiB' },
+      { bytes: 64 * 1024 * 1024, name: '64 MiB' },
       { bytes: 1024 * 1024 * 1024, name: '1 GiB' },
-      { bytes: 1024 * 1024 * 1024 * 1024, name: '1 TiB' }
+      { bytes: 64 * 1024 * 1024 * 1024, name: '64 GiB' },
+      { bytes: 1024 * 1024 * 1024 * 1024, name: '1 TiB' },
+      { bytes: 64 * 1024 * 1024 * 1024 * 1024, name: '64 TiB' }
     ];
 
     let yOffset = 30;
@@ -279,7 +293,7 @@ class HilbertMemoryMap {
         ctx.fillStyle = '#808080';
         ctx.fillRect(keyX, keyY + yOffset, squareSize, squareSize);
         ctx.fillStyle = '#000000';
-        ctx.fillText(`${size.name} (${pixels.toFixed(1)} px)`, keyX + squareSize + 10, keyY + yOffset + squareSize/2 + 5);
+        ctx.fillText(`${size.name} (${Math.round(pixels)} px)`, keyX + squareSize + 10, keyY + yOffset + squareSize/2 + 5);
 
         yOffset += squareSize + 10;
       }
@@ -287,8 +301,22 @@ class HilbertMemoryMap {
 
     // Additional info.
     ctx.font = '12px Arial';
-    ctx.fillText(`Each pixel = ${(bytesPerPixel / (1024*1024)).toFixed(1)} MiB`, keyX, keyY + yOffset + 20);
-    ctx.fillText(`Zoom level: ${level}`, keyX, keyY + yOffset + 40);
+
+    // Each dotted square is 128x128 pixels
+    const squareSize = 128;
+    const bytesPerSquare = bytesPerPixel * squareSize * squareSize;
+
+    ctx.fillText(`Each pixel = ${this.formatBytes(bytesPerPixel)}`, keyX, keyY + yOffset + 20);
+    ctx.fillText(`Each square = ${this.formatBytes(bytesPerSquare)}`, keyX, keyY + yOffset + 40);
+
+    if (level > 0) {
+      const totalAddressRange = Math.pow(2, 48); // Full 48-bit address space
+      const currentRange = maxAddr - minAddr;
+      ctx.fillText(`Zoomed view = ${this.formatBytes(currentRange)}`, keyX, keyY + yOffset + 60);
+      ctx.fillText(`Zoom level: ${level}`, keyX, keyY + yOffset + 80);
+    } else {
+      ctx.fillText(`Zoom level: ${level}`, keyX, keyY + yOffset + 60);
+    }
   }
 
   generateMemoryMapBuffer(inputFile, level, minAddr, maxAddr, offsetX, offsetY) {
@@ -302,7 +330,7 @@ class HilbertMemoryMap {
     console.log(`Parsed ${memoryRanges.length} memory ranges`);
     console.log(`Address range: 0x${minAddr.toString(16)} - 0x${maxAddr.toString(16)}`);
     console.log(`Canvas: ${this.width}x${this.height} pixels`);
-    console.log(`Resolution: ${bytesPerPixel / (1024*1024)} MiB per pixel`);
+    console.log(`Resolution: ${this.formatBytes(bytesPerPixel)} per pixel`);
 
     const canvas = this.drawMemoryMap(memoryRanges, level, minAddr, maxAddr, offsetX, offsetY);
     return canvas.toBuffer('image/png');
@@ -402,10 +430,6 @@ class HilbertMemoryMap {
             img.src = \`/memory-map.png?level=\${zoomState.level}&minAddr=\${zoomState.minAddr}&maxAddr=\${zoomState.maxAddr}&offsetX=\${zoomState.offsetX}&offsetY=\${zoomState.offsetY}\`;
         }
 
-        function addressToPixelIndex(address) {
-            const bytesPerPixel = Math.pow(2, 48 - 20); // 2^28 = 256MB.
-            return Math.floor(address / bytesPerPixel);
-        }
         function xyToHilbertIndex(x, y) {
             const n = 0x1000000; // 2^24 = 16777216
             let index = 0;
@@ -449,7 +473,7 @@ class HilbertMemoryMap {
             const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384 (maps 1024 pixels to 2^24 coords)
             const levelZoomFactor = Math.pow(8, zoomState.level);
             const actualZoomFactor = baseZoomFactor / levelZoomFactor;
-            
+
             const x24 = zoomState.offsetX + mapX * actualZoomFactor;
             const y24 = zoomState.offsetY + mapY * actualZoomFactor;
 
@@ -471,6 +495,20 @@ class HilbertMemoryMap {
 
             return null;
         }
+
+        function formatBytes(bytes) {
+            if (bytes >= 1024 * 1024 * 1024 * 1024) {
+                return Math.round(bytes / (1024 * 1024 * 1024 * 1024)) + ' TiB';
+            } else if (bytes >= 1024 * 1024 * 1024) {
+                return Math.round(bytes / (1024 * 1024 * 1024)) + ' GiB';
+            } else if (bytes >= 1024 * 1024) {
+                return Math.round(bytes / (1024 * 1024)) + ' MiB';
+            } else if (bytes >= 1024) {
+                return Math.round(bytes / 1024) + ' KiB';
+            } else {
+                return Math.round(bytes) + ' bytes';
+            }
+        }
         document.addEventListener('DOMContentLoaded', function() {
             loadMemoryMap();
 
@@ -483,30 +521,12 @@ class HilbertMemoryMap {
                 clearTimeout(clickTimeout);
                 clickTimeout = setTimeout(function() {
                     const coords = getMapCoordinates(e, canvas);
-
-                    console.log(\`Single click at canvas (\${coords.canvasX}, \${coords.canvasY}) -> map (\${coords.mapX}, \${coords.mapY})\`);
-                    console.log(\`Current zoom state: level=\${zoomState.level}, offsetX=\${zoomState.offsetX}, offsetY=\${zoomState.offsetY}, range=0x\${zoomState.minAddr.toString(16)} - 0x\${zoomState.maxAddr.toString(16)}\`);
-
                     const address = findAddressAtPixel(coords.mapX, coords.mapY);
-                    console.log(\`Calculated address: 0x\${address.toString(16)}\`);
-
                     const region = findRegionFromAddress(address);
-                    console.log(\`Found region:\`, region);
 
                     if (region) {
                         const size = region.end - region.start;
-                        let sizeStr;
-                        if (size >= 1024 * 1024 * 1024 * 1024) {
-                            sizeStr = (size / (1024 * 1024 * 1024 * 1024)).toFixed(1) + ' TiB';
-                        } else if (size >= 1024 * 1024 * 1024) {
-                            sizeStr = (size / (1024 * 1024 * 1024)).toFixed(1) + ' GiB';
-                        } else if (size >= 1024 * 1024) {
-                            sizeStr = (size / (1024 * 1024)).toFixed(1) + ' MiB';
-                        } else if (size >= 1024) {
-                            sizeStr = (size / 1024).toFixed(1) + ' KiB';
-                        } else {
-                            sizeStr = size + ' bytes';
-                        }
+                        const sizeStr = formatBytes(size);
 
                         tooltip.innerHTML = \`<span class="tooltip-close" onclick="hideTooltip()">&times;</span>\${region.name}<br>0x\${region.start.toString(16)} - 0x\${region.end.toString(16)}<br>Size: \${sizeStr}\`;
                         tooltip.style.display = 'block';
@@ -522,14 +542,15 @@ class HilbertMemoryMap {
                 clearTimeout(clickTimeout); // Cancel single-click.
                 const coords = getMapCoordinates(e, canvas);
 
-                console.log(\`Double-click at canvas (\${coords.canvasX}, \${coords.canvasY}) -> map (\${coords.mapX}, \${coords.mapY})\`);
-                console.log(\`Current zoom state: level=\${zoomState.level}, offsetX=\${zoomState.offsetX}, offsetY=\${zoomState.offsetY}\`);
-                console.log(\`Current address range: 0x\${zoomState.minAddr.toString(16)} - 0x\${zoomState.maxAddr.toString(16)}\`);
+                const maxZoomLevel = 4;
+
+                if (zoomState.level >= maxZoomLevel) {
+                    return;
+                }
 
                 if (coords.mapX >= 0 && coords.mapX < 1024 && coords.mapY >= 0 && coords.mapY < 1024) {
                     // Find what address was clicked.
                     const clickedAddress = findAddressAtPixel(coords.mapX, coords.mapY);
-                    console.log(\`Clicked address: 0x\${clickedAddress.toString(16)}\`);
 
                     // Round to nearest 64th boundaries.
                     const currentRange = zoomState.maxAddr - zoomState.minAddr;
@@ -537,14 +558,12 @@ class HilbertMemoryMap {
                     const gridIndex = Math.floor((clickedAddress - zoomState.minAddr) / gridAddressSize);
                     const gridStartAddr = zoomState.minAddr + gridIndex * gridAddressSize;
                     const gridEndAddr = gridStartAddr + gridAddressSize;
-                    console.log(\`Grid: index=\${gridIndex}, range=0x\${gridStartAddr.toString(16)} - 0x\${gridEndAddr.toString(16)}\`);
 
                     // Calculate new offsets based on canvas coordinates.
                     // Each 8x8 grid square becomes the new canvas, so find which grid square was clicked.
                     const gridX = Math.floor(coords.mapX / (1024 / 8)); // Which of the 8 columns.
                     const gridY = Math.floor(coords.mapY / (1024 / 8)); // Which of the 8 rows.
                     const pixelsPerGrid = 1024 / 8; // 128 pixels per grid square.
-                    console.log(\`Grid position: (\${gridX}, \${gridY}), pixels per grid: \${pixelsPerGrid}\`);
 
                     // Calculate the offset in Hilbert coordinate system (order 24).
                     const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384 (maps 2^24 coords to 1024 pixels).
@@ -553,7 +572,6 @@ class HilbertMemoryMap {
 
                     const newOffsetX = zoomState.offsetX + gridX * pixelsPerGrid * actualZoomFactor;
                     const newOffsetY = zoomState.offsetY + gridY * pixelsPerGrid * actualZoomFactor;
-                    console.log(\`Actual zoom factor: \${actualZoomFactor}, new offsets: (\${newOffsetX}, \${newOffsetY})\`);
 
                     // Update zoom state.
                     zoomState.level++;
@@ -561,9 +579,6 @@ class HilbertMemoryMap {
                     zoomState.maxAddr = gridEndAddr;
                     zoomState.offsetX = newOffsetX;
                     zoomState.offsetY = newOffsetY;
-
-                    console.log(\`Updated zoom state: level=\${zoomState.level}, offsetX=\${zoomState.offsetX}, offsetY=\${zoomState.offsetY}\`);
-                    console.log(\`New address range: 0x\${zoomState.minAddr.toString(16)} - 0x\${zoomState.maxAddr.toString(16)}\`);
 
                     hideTooltip();
                     updateCanvas();
