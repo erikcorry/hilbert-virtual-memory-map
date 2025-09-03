@@ -155,3 +155,64 @@ canvas {
 .tooltip-close:hover {
     color: #000;
 }
+
+/* Mobile responsive layout */
+@media screen and (max-width: 768px) {
+    .canvas-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    #backgroundCanvas {
+        order: 1;
+    }
+    
+    #memoryCanvas {
+        /* Mobile positioning - adjusted for reduced border */
+        position: absolute;
+        top: calc(100% * 100 / (1024 + 100 + 100));
+        left: calc(100% * 100 / (1024 + 100 + 100));
+        width: calc(100% * 1024 / (1024 + 100 + 100));
+        height: calc(100% * 1024 / (1024 + 100 + 100));
+        order: 1;
+        margin-top: 0;
+    }
+    
+    .mobile-scale-info {
+        display: block;
+        background-color: #f8f8f8;
+        padding: 15px;
+        margin-top: 10px;
+        border-radius: 4px;
+        font-size: 14px;
+        line-height: 1.4;
+        order: 2;
+        width: 100%;
+        box-sizing: border-box;
+    }
+}
+
+@media screen and (min-width: 769px) {
+    .mobile-scale-info {
+        display: none;
+    }
+    
+    .mobile-instruction {
+        display: none;
+    }
+    
+    .desktop-instruction {
+        display: inline;
+    }
+}
+
+@media screen and (max-width: 768px) {
+    .desktop-instruction {
+        display: none;
+    }
+    
+    .mobile-instruction {
+        display: inline;
+    }
+}

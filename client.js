@@ -315,15 +315,18 @@ function updateCanvas() {
     originalCanvasData = null;
     highlightedRegion = null;
 
+    // Check if we're on mobile
+    const isMobile = window.innerWidth <= 768;
+    
     // Set canvas sizes
     const mapWidth = 1024;
     const mapHeight = 1024;
     const borderTop = 100;
     const borderBottom = 100;
     const borderLeft = 100;
-    const borderRight = 450;
+    const borderRight = isMobile ? 100 : 450; // Reduced right border on mobile
     
-    // Background canvas (borders, legend, grid)
+    // Background canvas (borders, legend on desktop, just borders on mobile)
     const backgroundCanvas = document.getElementById('backgroundCanvas');
     const backgroundCtx = backgroundCanvas.getContext('2d');
     backgroundCanvas.width = mapWidth + borderLeft + borderRight;
@@ -335,7 +338,13 @@ function updateCanvas() {
     memoryCanvas.width = mapWidth;
     memoryCanvas.height = mapHeight;
 
-    drawBackground(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+    if (isMobile) {
+        drawBackgroundMobile(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+        updateMobileScaleInfo();
+    } else {
+        drawBackground(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+    }
+    
     drawMemoryData(memoryCtx, mapWidth, mapHeight);
 }
 
@@ -457,6 +466,57 @@ function drawBackground(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderR
 
     // Draw scale key (but not grid lines - those go on memory canvas)
     drawScaleKey(ctx, mapWidth, borderLeft, borderTop, borderRight, zoomState.level, bytesPerPixel, minAddr, maxAddr);
+}
+
+function drawBackgroundMobile(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRight) {
+    // Light gray background for entire canvas
+    ctx.fillStyle = '#C0C0C0';
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    // Black background for the actual map area
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(borderLeft, borderTop, mapWidth, mapHeight);
+    
+    // No scale key drawn on mobile - it goes in the HTML div below
+}
+
+function updateMobileScaleInfo() {
+    const mobileScaleDiv = document.getElementById('mobile-scale-info');
+    if (!mobileScaleDiv) return;
+    
+    const minAddr = zoomState.minAddr;
+    const maxAddr = zoomState.maxAddr;
+    const addressRange = maxAddr - minAddr;
+    const bytesPerPixel = addressRange / (1024 * 1024);
+    const squareSize = 128;
+    const bytesPerSquare = bytesPerPixel * squareSize * squareSize;
+    
+    let html = `
+        <div style="margin-bottom: 10px;">
+            <strong>Memory Range:</strong><br>
+            0x${minAddr.toString(16)} - 0x${maxAddr.toString(16)}
+        </div>
+        <div style="margin-bottom: 10px;">
+            <strong>Scale:</strong><br>
+            Each pixel = ${formatBytes(bytesPerPixel)}<br>
+            Each square = ${formatBytes(bytesPerSquare)}
+        </div>
+    `;
+    
+    if (zoomState.level > 0) {
+        const currentRange = maxAddr - minAddr;
+        html += `
+            <div>
+                <strong>Zoom:</strong><br>
+                Level ${zoomState.level}<br>
+                View = ${formatBytes(currentRange)}
+            </div>
+        `;
+    } else {
+        html += `<div><strong>Zoom Level:</strong> ${zoomState.level}</div>`;
+    }
+    
+    mobileScaleDiv.innerHTML = html;
 }
 
 function drawMemoryData(ctx, mapWidth, mapHeight) {
