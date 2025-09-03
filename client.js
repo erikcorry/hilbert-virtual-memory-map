@@ -854,9 +854,15 @@ function animateZoom(gridX, gridY, newZoomState) {
             const mapHeight = 1024;
             const borderLeft = 100;
             const borderTop = 100;
-            const borderRight = 450;
+            const isMobile = window.innerWidth <= 768;
+            const borderRight = isMobile ? 100 : 450;
             
-            drawBackground(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+            if (isMobile) {
+                drawBackgroundMobile(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+                updateMobileScaleInfo();
+            } else {
+                drawBackground(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+            }
             
             // Clean up
             container.removeChild(animatingCanvas);
@@ -1096,5 +1102,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (e.key === 'r' || e.key === 'R') {
             resetZoom();
         }
+    });
+    
+    // Window resize listener for responsive layout updates
+    let resizeTimeout;
+    window.addEventListener('resize', function() {
+        // Debounce resize events to avoid excessive redraws
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(function() {
+            // Only update canvas if we're not currently animating
+            if (!animationState.isAnimating) {
+                updateCanvas();
+            }
+        }, 250); // 250ms debounce delay
     });
 });

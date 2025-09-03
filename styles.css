@@ -74,7 +74,7 @@ canvas {
     top: calc(100% * 100 / (1024 + 100 + 100));
     left: calc(100% * 100 / (1024 + 100 + 450));
     width: calc(100% * 1024 / (1024 + 100 + 450));
-    height: calc(100% * 1024 / (1024 + 100 + 100));
+    aspect-ratio: 1;
     z-index: 2;
     cursor: crosshair;
     transition: transform 0.8s cubic-bezier(0.23, 1, 0.320, 1);
@@ -169,12 +169,11 @@ canvas {
     }
     
     #memoryCanvas {
-        /* Mobile positioning - adjusted for reduced border */
-        position: absolute;
-        top: calc(100% * 100 / (1024 + 100 + 100));
-        left: calc(100% * 100 / (1024 + 100 + 100));
-        width: calc(100% * 1024 / (1024 + 100 + 100));
-        height: calc(100% * 1024 / (1024 + 100 + 100));
+        /* Mobile positioning - inherit desktop top, adjust left for mobile */
+        position: absolute !important;
+        left: calc(100% * 100 / (1024 + 100 + 100)) !important; /* 100/1224 for mobile left border */
+        width: calc(100% * 1024 / (1024 + 100 + 100)) !important; /* 1024/1224 for mobile width */
+        aspect-ratio: 1 !important;
         order: 1;
         margin-top: 0;
     }
