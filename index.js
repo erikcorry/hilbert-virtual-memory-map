@@ -52,6 +52,16 @@ function startServer(inputFile, port = 8080) {
           res.writeHead(500, { 'Content-Type': 'text/plain' });
           res.end('Error loading stylesheet: ' + error.message);
         }
+      } else if (parsedUrl.pathname === '/favicon.ico') {
+        // Serve favicon (actually a PNG file).
+        try {
+          const faviconContent = fs.readFileSync('favicon.ico');
+          res.writeHead(200, { 'Content-Type': 'image/png' });
+          res.end(faviconContent);
+        } catch (error) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('Favicon not found');
+        }
       } else if (parsedUrl.pathname === '/original-data') {
         // Serve original input file content for text editor.
         try {
