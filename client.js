@@ -4,13 +4,60 @@ let colorMap = new Map();
 let colorIndex = 0;
 let highlightedRegion = null;
 let originalCanvasData = null;
-let zoomState = {
-    level: 0,                      // Current zoom level (0 = full view).
-    minAddr: 0,                    // Lowest address in current view.
-    maxAddr: Math.pow(2, 48),     // Highest address in current view (256 TiB).
-    offsetX: 0,                   // X offset in 2^24 coordinate system.
-    offsetY: 0                    // Y offset in 2^24 coordinate system.
+// Layout constants
+const MAP = {
+    WIDTH: 1024,              // Memory map canvas width
+    HEIGHT: 1024,             // Memory map canvas height
+    BORDER_TOP: 100,              // Top border/margin
+    BORDER_BOTTOM: 100,           // Bottom border/margin  
+    BORDER_LEFT: 100,             // Left border/margin
+    BORDER_RIGHT_DESKTOP: 450,    // Right border/margin on desktop
+    BORDER_RIGHT_MOBILE: 100,     // Right border/margin on mobile
+    KEY_OFFSET: 50,               // Offset for legend from map edge
+    MAX_ZOOM: 4                   // Max zoom level.
 };
+
+class ZoomState {
+    constructor(level = 0, minAddr = 0, maxAddr = Math.pow(2, 48), offsetX = 0, offsetY = 0) {
+        this.level = level;         // Current zoom level (0 = full view)
+        this.minAddr = minAddr;     // Lowest address in current view
+        this.maxAddr = maxAddr;     // Highest address in current view (256 TiB)
+        this.offsetX = offsetX;     // X offset in 2^24 coordinate system
+        this.offsetY = offsetY;     // Y offset in 2^24 coordinate system
+    }
+
+    // Check if this zoom state equals another
+    equals(other) {
+        return this.level === other.level &&
+               this.minAddr === other.minAddr &&
+               this.maxAddr === other.maxAddr &&
+               this.offsetX === other.offsetX &&
+               this.offsetY === other.offsetY;
+    }
+
+    // Get the zoom factor for coordinate scaling
+    getZoomFactor() {
+        const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384
+        const levelZoomFactor = Math.pow(8, this.level);
+        return levelZoomFactor / baseZoomFactor;
+    }
+
+    // Create a copy of this zoom state
+    copy() {
+        return new ZoomState(this.level, this.minAddr, this.maxAddr, this.offsetX, this.offsetY);
+    }
+
+    // Reset to default state
+    reset() {
+        this.level = 0;
+        this.minAddr = 0;
+        this.maxAddr = Math.pow(2, 48);
+        this.offsetX = 0;
+        this.offsetY = 0;
+    }
+}
+
+let zoomState = new ZoomState();
 
 let animationState = {
     isAnimating: false,           // Whether we're currently animating
@@ -146,24 +193,23 @@ function getAlignment(address) {
 function applyShading(region) {
     const canvas = document.getElementById('memoryCanvas');
     const ctx = canvas.getContext('2d');
-    const mapWidth = 1024;
-    const mapHeight = 1024;
     
     // Store original canvas data
     originalCanvasData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     highlightedRegion = region;
     
     // Get image data for the entire memory canvas
-    const imageData = ctx.getImageData(0, 0, mapWidth, mapHeight);
+    const imageData = ctx.getImageData(0, 0, MAP.WIDTH, MAP.HEIGHT);
     const data = imageData.data;
     
     // Calculate visible address range for current zoom
     const { minAddr, maxAddr } = zoomState;
-    const bytesPerPixel = (maxAddr - minAddr) / (mapWidth * mapHeight);
+    const bytesPerPixel = (maxAddr - minAddr) / (MAP.WIDTH * MAP.HEIGHT);
     
     // Apply shading to pixels in the highlighted region
     const startAddr = Math.max(region.start, minAddr);
     const endAddr = Math.min(region.end, maxAddr);
+    const zoomFactor = zoomState.getZoomFactor();
     
     for (let address = startAddr; address < endAddr; address += bytesPerPixel) {
         // Get coordinates in 2^24 coordinate system
@@ -171,18 +217,15 @@ function applyShading(region) {
         const [x24, y24] = hilbertIndexToXY(address, order);
         
         // Scale from 2^24 to 1024 and apply offset
-        const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384
-        const levelZoomFactor = Math.pow(8, zoomState.level);
-        const actualZoomFactor = baseZoomFactor / levelZoomFactor;
         
-        const scaledX = Math.floor((x24 - zoomState.offsetX) / actualZoomFactor);
-        const scaledY = Math.floor((y24 - zoomState.offsetY) / actualZoomFactor);
+        const scaledX = Math.floor((x24 - zoomState.offsetX) * zoomFactor);
+        const scaledY = Math.floor((y24 - zoomState.offsetY) * zoomFactor);
         
-        if (scaledX >= 0 && scaledX < mapWidth && scaledY >= 0 && scaledY < mapHeight) {
+        if (scaledX >= 0 && scaledX < MAP.WIDTH && scaledY >= 0 && scaledY < MAP.HEIGHT) {
             // Check if this pixel should be highlighted based on shading pattern
             const shadingValue = (scaledX + scaledY) % 8;
             if (shadingValue >= 2 && shadingValue <= 4) {
-                const dataIndex = (scaledY * mapWidth + scaledX) * 4;
+                const dataIndex = (scaledY * MAP.WIDTH + scaledX) * 4;
                 data[dataIndex] = 255;     // Red = white
                 data[dataIndex + 1] = 255; // Green = white  
                 data[dataIndex + 2] = 255; // Blue = white
@@ -318,34 +361,26 @@ function updateCanvas() {
     // Check if we're on mobile
     const isMobile = window.innerWidth <= 768;
     
-    // Set canvas sizes
-    const mapWidth = 1024;
-    const mapHeight = 1024;
-    const borderTop = 100;
-    const borderBottom = 100;
-    const borderLeft = 100;
-    const borderRight = isMobile ? 100 : 450; // Reduced right border on mobile
-    
     // Background canvas (borders, legend on desktop, just borders on mobile)
     const backgroundCanvas = document.getElementById('backgroundCanvas');
     const backgroundCtx = backgroundCanvas.getContext('2d');
-    backgroundCanvas.width = mapWidth + borderLeft + borderRight;
-    backgroundCanvas.height = mapHeight + borderTop + borderBottom;
+    backgroundCanvas.width = MAP.WIDTH + MAP.BORDER_LEFT + (isMobile ? MAP.BORDER_RIGHT_MOBILE : MAP.BORDER_RIGHT_DESKTOP);
+    backgroundCanvas.height = MAP.HEIGHT + MAP.BORDER_TOP + MAP.BORDER_BOTTOM;
     
     // Memory map canvas (just the 1024x1024 memory data)
     const memoryCanvas = document.getElementById('memoryCanvas');
     const memoryCtx = memoryCanvas.getContext('2d');
-    memoryCanvas.width = mapWidth;
-    memoryCanvas.height = mapHeight;
+    memoryCanvas.width = MAP.WIDTH;
+    memoryCanvas.height = MAP.HEIGHT;
 
     if (isMobile) {
-        drawBackgroundMobile(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+        drawBackgroundMobile(backgroundCtx);
         updateMobileScaleInfo();
     } else {
-        drawBackground(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+        drawBackground(backgroundCtx);
     }
     
-    drawMemoryData(memoryCtx, mapWidth, mapHeight);
+    drawMemoryData(memoryCtx);
 }
 
 function xyToHilbertIndex(x, y) {
@@ -406,12 +441,10 @@ function getMapCoordinates(e, memoryCanvas) {
 
 function findAddressAtPixel(mapX, mapY) {
     // Convert 1024x1024 coordinates to 2^24 coordinate system and apply zoom offsets
-    const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384 (maps 1024 pixels to 2^24 coords)
-    const levelZoomFactor = Math.pow(8, zoomState.level);
-    const actualZoomFactor = baseZoomFactor / levelZoomFactor;
+    const zoomFactor = zoomState.getZoomFactor();
 
-    const x24 = zoomState.offsetX + mapX * actualZoomFactor;
-    const y24 = zoomState.offsetY + mapY * actualZoomFactor;
+    const x24 = zoomState.offsetX + mapX / zoomFactor;
+    const y24 = zoomState.offsetY + mapY / zoomFactor;
 
     // Check bounds in the 2^24 coordinate system
     const maxCoord24 = Math.pow(2, 24) - 1;
@@ -450,11 +483,11 @@ function formatBytes(bytes) {
     }
 }
 
-function drawBackground(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRight) {
+function drawBackground(ctx) {
     const minAddr = zoomState.minAddr;
     const maxAddr = zoomState.maxAddr;
     const addressRange = maxAddr - minAddr;
-    const bytesPerPixel = addressRange / (mapWidth * mapHeight);
+    const bytesPerPixel = addressRange / (MAP.WIDTH * MAP.HEIGHT);
 
     // Light gray background for entire canvas
     ctx.fillStyle = '#C0C0C0';
@@ -462,20 +495,20 @@ function drawBackground(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderR
 
     // Black background for the actual map area
     ctx.fillStyle = '#000000';
-    ctx.fillRect(borderLeft, borderTop, mapWidth, mapHeight);
+    ctx.fillRect(MAP.BORDER_LEFT, MAP.BORDER_TOP, MAP.WIDTH, MAP.HEIGHT);
 
     // Draw scale key (but not grid lines - those go on memory canvas)
-    drawScaleKey(ctx, mapWidth, borderLeft, borderTop, borderRight, zoomState.level, bytesPerPixel, minAddr, maxAddr);
+    drawScaleKey(ctx, zoomState.level, bytesPerPixel, minAddr, maxAddr);
 }
 
-function drawBackgroundMobile(ctx, mapWidth, mapHeight, borderLeft, borderTop, borderRight) {
+function drawBackgroundMobile(ctx) {
     // Light gray background for entire canvas
     ctx.fillStyle = '#C0C0C0';
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
     // Black background for the actual map area
     ctx.fillStyle = '#000000';
-    ctx.fillRect(borderLeft, borderTop, mapWidth, mapHeight);
+    ctx.fillRect(MAP.BORDER_LEFT, MAP.BORDER_TOP, MAP.WIDTH, MAP.HEIGHT);
     
     // No scale key drawn on mobile - it goes in the HTML div below
 }
@@ -519,8 +552,8 @@ function updateMobileScaleInfo() {
     mobileScaleDiv.innerHTML = html;
 }
 
-function drawMemoryData(ctx, mapWidth, mapHeight) {
-    const totalPixels = mapWidth * mapHeight;
+function drawMemoryData(ctx) {
+    const totalPixels = MAP.WIDTH * MAP.HEIGHT;
     const minAddr = zoomState.minAddr;
     const maxAddr = zoomState.maxAddr;
     const addressRange = maxAddr - minAddr;
@@ -528,7 +561,7 @@ function drawMemoryData(ctx, mapWidth, mapHeight) {
 
     // Black background for the memory canvas
     ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, mapWidth, mapHeight);
+    ctx.fillRect(0, 0, MAP.WIDTH, MAP.HEIGHT);
 
     if (regions.length === 0) {
         return;
@@ -540,8 +573,11 @@ function drawMemoryData(ctx, mapWidth, mapHeight) {
     );
 
     // Create image data for the memory canvas
-    const imageData = ctx.getImageData(0, 0, mapWidth, mapHeight);
+    const imageData = ctx.getImageData(0, 0, MAP.WIDTH, MAP.HEIGHT);
     const data = imageData.data;
+
+    // Get zoom factor once outside of loops
+    const zoomFactor = zoomState.getZoomFactor();
 
     // Process each visible memory range
     visibleRanges.forEach(range => {
@@ -558,16 +594,13 @@ function drawMemoryData(ctx, mapWidth, mapHeight) {
             const [x24, y24] = hilbertIndexToXY(address, order);
 
             // Scale from 2^24 to 1024 and apply offset
-            const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384
-            const levelZoomFactor = Math.pow(8, zoomState.level);
-            const actualZoomFactor = baseZoomFactor / levelZoomFactor;
 
-            const scaledX = Math.floor((x24 - zoomState.offsetX) / actualZoomFactor);
-            const scaledY = Math.floor((y24 - zoomState.offsetY) / actualZoomFactor);
+            const scaledX = Math.floor((x24 - zoomState.offsetX) * zoomFactor);
+            const scaledY = Math.floor((y24 - zoomState.offsetY) * zoomFactor);
 
-            if (scaledX >= 0 && scaledX < mapWidth &&
-                scaledY >= 0 && scaledY < mapHeight) {
-                const dataIndex = (scaledY * mapWidth + scaledX) * 4;
+            if (scaledX >= 0 && scaledX < MAP.WIDTH &&
+                scaledY >= 0 && scaledY < MAP.HEIGHT) {
+                const dataIndex = (scaledY * MAP.WIDTH + scaledX) * 4;
                 data[dataIndex] = r;     // Red
                 data[dataIndex + 1] = g; // Green
                 data[dataIndex + 2] = b; // Blue
@@ -580,10 +613,10 @@ function drawMemoryData(ctx, mapWidth, mapHeight) {
     ctx.putImageData(imageData, 0, 0);
     
     // Draw grid lines on top of the memory data
-    drawGridLines(ctx, mapWidth, mapHeight, 0, 0, zoomState.level);
+    drawGridLines(ctx, zoomState.level);
 }
 
-function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLevel) {
+function drawGridLines(ctx, zoomLevel) {
     const tbSize = 128; // 128x128 pixel squares
     
     // Helper function to draw a single line segment with appropriate style
@@ -622,7 +655,7 @@ function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLeve
         
         // Calculate the memory size of one 128x128 square
         const { minAddr, maxAddr } = zoomState;
-        const bytesPerPixel = (maxAddr - minAddr) / (mapWidth * mapHeight);
+        const bytesPerPixel = (maxAddr - minAddr) / (MAP.WIDTH * MAP.HEIGHT);
         const bytesPerSquare = bytesPerPixel * tbSize * tbSize;
         
         // Round addresses down to square boundaries
@@ -641,9 +674,9 @@ function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLeve
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
     
     // Draw vertical lines
-    for (let i = 0; i <= 1024; i += tbSize) {
+    for (let i = 0; i <= MAP.WIDTH; i += tbSize) {
         // Check each segment of the vertical line
-        for (let j = 0; j < 1024; j += tbSize) {
+        for (let j = 0; j < MAP.HEIGHT; j += tbSize) {
             const leftSquareX = i - tbSize;
             const rightSquareX = i;
             const squareY = j;
@@ -657,9 +690,9 @@ function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLeve
     }
     
     // Draw horizontal lines
-    for (let i = 0; i <= 1024; i += tbSize) {
+    for (let i = 0; i <= MAP.HEIGHT; i += tbSize) {
         // Check each segment of the horizontal line
-        for (let j = 0; j < 1024; j += tbSize) {
+        for (let j = 0; j < MAP.WIDTH; j += tbSize) {
             const squareX = j;
             const topSquareY = i - tbSize;
             const bottomSquareY = i;
@@ -676,9 +709,9 @@ function drawGridLines(ctx, mapWidth, mapHeight, borderLeft, borderTop, zoomLeve
     ctx.setLineDash([]);
 }
 
-function drawScaleKey(ctx, mapWidth, borderLeft, borderTop, borderRight, level, bytesPerPixel, minAddr, maxAddr) {
-    const keyX = borderLeft + mapWidth + 50;
-    const keyY = borderTop + 100;
+function drawScaleKey(ctx, level, bytesPerPixel, minAddr, maxAddr) {
+    const keyX = MAP.BORDER_LEFT + MAP.WIDTH + MAP.KEY_OFFSET;
+    const keyY = MAP.BORDER_TOP + 100;
 
     // Set text style
     ctx.fillStyle = '#000000';
@@ -743,18 +776,140 @@ function hideTooltip() {
     removeShading();
 }
 
+function showTooltipForCoords(coords, clientX, clientY) {
+    const address = findAddressAtPixel(coords.mapX, coords.mapY);
+    const region = findRegionFromAddress(address);
+    const tooltip = document.getElementById('tooltip');
+    
+    if (region) {
+        const size = region.end - region.start;
+        const sizeHex = '0x' + size.toString(16);
+        const sizeApprox = formatBytes(size);
+        
+        const startAlignment = getAlignment(region.start);
+        const endAlignment = getAlignment(region.end);
+        const startAlignmentStr = formatBytes(startAlignment);
+        const endAlignmentStr = formatBytes(endAlignment);
+        
+        tooltip.innerHTML = `<span class="tooltip-close" onclick="hideTooltip()">&times;</span>${region.name}<br>0x${region.start.toString(16)} - 0x${region.end.toString(16)}<br>Size: ${sizeHex} (ca. ${sizeApprox})<br>Start alignment: ${startAlignmentStr}<br>End alignment: ${endAlignmentStr}`;
+        tooltip.style.display = 'block';
+        tooltip.style.left = clientX + 'px';
+        tooltip.style.top = (clientY - 100) + 'px';
+        
+        // Remove any existing shading and apply new shading
+        removeShading();
+        applyShading(region);
+    } else {
+        hideTooltip();
+    }
+}
+
+function maybePerformZoom(coords) {
+    // Check zoom level and bounds
+    if (zoomState.level >= MAP.MAX_ZOOM) {
+        return;
+    }
+    
+    if (coords.mapX < 0 || coords.mapX >= 1024 || coords.mapY < 0 || coords.mapY >= 1024) {
+        return;
+    }
+    
+    // Find what address was clicked.
+    const clickedAddress = findAddressAtPixel(coords.mapX, coords.mapY);
+    // Round to nearest 64th boundaries.
+    const currentRange = zoomState.maxAddr - zoomState.minAddr;
+    const gridAddressSize = currentRange / 64; // 8x8 = 64 squares.
+    const gridIndex = Math.floor((clickedAddress - zoomState.minAddr) / gridAddressSize);
+    const gridStartAddr = zoomState.minAddr + gridIndex * gridAddressSize;
+    const gridEndAddr = gridStartAddr + gridAddressSize;
+    
+    // Calculate new offsets based on canvas coordinates.
+    // Each 8x8 grid square becomes the new canvas, so find which grid square was clicked.
+    const gridX = Math.floor(coords.mapX / (1024 / 8)); // Which of the 8 columns.
+    const gridY = Math.floor(coords.mapY / (1024 / 8)); // Which of the 8 rows.
+    const pixelsPerGrid = 1024 / 8; // 128 pixels per grid square.
+    
+    // Calculate the offset in Hilbert coordinate system (order 24).
+    const zoomFactor = zoomState.getZoomFactor();
+    
+    const newOffsetX = zoomState.offsetX + gridX * pixelsPerGrid / zoomFactor;
+    const newOffsetY = zoomState.offsetY + gridY * pixelsPerGrid / zoomFactor;
+    
+    // Prepare new zoom state
+    const newZoomState = new ZoomState(
+        zoomState.level + 1,
+        gridStartAddr,
+        gridEndAddr,
+        newOffsetX,
+        newOffsetY
+    );
+    
+    hideTooltip();
+    
+    // Trigger animated zoom
+    animateZoom(gridX, gridY, newZoomState);
+}
+
 function resetZoom() {
-    zoomState.level = 0;
-    zoomState.minAddr = 0;
-    zoomState.maxAddr = Math.pow(2, 48);
-    zoomState.offsetX = 0;
-    zoomState.offsetY = 0;
+    zoomState.reset();
     hideTooltip();
     
     // Reset memory canvas transform and update
     const memoryCanvas = document.getElementById('memoryCanvas');
     memoryCanvas.style.transform = '';
     updateCanvas();
+    updateURLState();
+}
+
+function updateURLState() {
+    const url = new URL(window.location);
+    
+    if (zoomState.level === 0) {
+        // Remove zoom parameters for default state
+        url.searchParams.delete('level');
+        url.searchParams.delete('minAddr');
+        url.searchParams.delete('maxAddr');
+        url.searchParams.delete('offsetX');
+        url.searchParams.delete('offsetY');
+    } else {
+        // Add zoom parameters
+        url.searchParams.set('level', zoomState.level.toString());
+        url.searchParams.set('minAddr', '0x' + zoomState.minAddr.toString(16));
+        url.searchParams.set('maxAddr', '0x' + zoomState.maxAddr.toString(16));
+        url.searchParams.set('offsetX', zoomState.offsetX.toString());
+        url.searchParams.set('offsetY', zoomState.offsetY.toString());
+    }
+    
+    // Update URL without triggering a page reload
+    window.history.pushState(null, '', url.toString());
+}
+
+function parseURLState() {
+    const params = new URLSearchParams(window.location.search);
+    
+    if (params.has('level')) {
+        const level = parseInt(params.get('level'));
+        const minAddr = parseInt(params.get('minAddr'), 16);
+        const maxAddr = parseInt(params.get('maxAddr'), 16);
+        const offsetX = parseFloat(params.get('offsetX'));
+        const offsetY = parseFloat(params.get('offsetY'));
+        
+        // Validate the parameters
+        if (!isNaN(level) && !isNaN(minAddr) && !isNaN(maxAddr) && 
+            !isNaN(offsetX) && !isNaN(offsetY) && 
+            level >= 0 && level <= 4) {
+            
+            zoomState.level = level;
+            zoomState.minAddr = minAddr;
+            zoomState.maxAddr = maxAddr;
+            zoomState.offsetX = offsetX;
+            zoomState.offsetY = offsetY;
+            
+            return true; // State was restored from URL
+        }
+    }
+    
+    return false; // No valid state in URL
 }
 
 function animateZoom(gridX, gridY, newZoomState) {
@@ -770,19 +925,19 @@ function animateZoom(gridX, gridY, newZoomState) {
     
     // Create off-screen canvas with new zoomed content
     const offScreenCanvas = document.createElement('canvas');
-    offScreenCanvas.width = 1024;
-    offScreenCanvas.height = 1024;
+    offScreenCanvas.width = MAP.WIDTH;
+    offScreenCanvas.height = MAP.HEIGHT;
     const offScreenCtx = offScreenCanvas.getContext('2d');
     
     // Render new zoomed content to off-screen canvas
-    const oldZoomState = { ...zoomState };
+    const oldZoomState = zoomState.copy();
     Object.assign(zoomState, newZoomState);
-    drawMemoryData(offScreenCtx, 1024, 1024);
+    drawMemoryData(offScreenCtx);
     
     // Create DOM element from off-screen canvas and position it
     const animatingCanvas = document.createElement('canvas');
-    animatingCanvas.width = 1024;
-    animatingCanvas.height = 1024;
+    animatingCanvas.width = MAP.WIDTH;
+    animatingCanvas.height = MAP.HEIGHT;
     animatingCanvas.style.position = 'absolute';
     animatingCanvas.style.zIndex = '3'; // Above the memory canvas
     animatingCanvas.style.pointerEvents = 'none';
@@ -850,24 +1005,22 @@ function animateZoom(gridX, gridY, newZoomState) {
             // Update the background canvas (legend/scale key) with new zoom state
             const backgroundCanvas = document.getElementById('backgroundCanvas');
             const backgroundCtx = backgroundCanvas.getContext('2d');
-            const mapWidth = 1024;
-            const mapHeight = 1024;
-            const borderLeft = 100;
-            const borderTop = 100;
             const isMobile = window.innerWidth <= 768;
-            const borderRight = isMobile ? 100 : 450;
             
             if (isMobile) {
-                drawBackgroundMobile(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+                drawBackgroundMobile(backgroundCtx);
                 updateMobileScaleInfo();
             } else {
-                drawBackground(backgroundCtx, mapWidth, mapHeight, borderLeft, borderTop, borderRight);
+                drawBackground(backgroundCtx);
             }
             
             // Clean up
             container.removeChild(animatingCanvas);
             animationState.isAnimating = false;
             memoryCanvas.classList.remove('animating');
+            
+            // Update URL state after zoom completes
+            updateURLState();
         }, animationState.duration);
     }, 50);
 }
@@ -880,6 +1033,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         // If sample file loaded successfully, apply changes and switch to map
         await applyChanges();
         switchTab('map');
+        
+        // Check if URL contains zoom state to restore
+        const urlStateRestored = parseURLState();
+        if (urlStateRestored) {
+            // URL contained valid zoom state, update canvas to reflect it
+            updateCanvas();
+        }
     } else {
         // If sample file failed to load, stay on text editor
         switchTab('editor');
@@ -899,30 +1059,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         clearTimeout(clickTimeout);
         clickTimeout = setTimeout(function() {
             const coords = getMapCoordinates(e, canvas);
-            const address = findAddressAtPixel(coords.mapX, coords.mapY);
-            const region = findRegionFromAddress(address);
-
-            if (region) {
-                const size = region.end - region.start;
-                const sizeHex = '0x' + size.toString(16);
-                const sizeApprox = formatBytes(size);
-                
-                const startAlignment = getAlignment(region.start);
-                const endAlignment = getAlignment(region.end);
-                const startAlignmentStr = formatBytes(startAlignment);
-                const endAlignmentStr = formatBytes(endAlignment);
-
-                tooltip.innerHTML = `<span class="tooltip-close" onclick="hideTooltip()">&times;</span>${region.name}<br>0x${region.start.toString(16)} - 0x${region.end.toString(16)}<br>Size: ${sizeHex} (ca. ${sizeApprox})<br>Start alignment: ${startAlignmentStr}<br>End alignment: ${endAlignmentStr}`;
-                tooltip.style.display = 'block';
-                tooltip.style.left = e.clientX + 'px';
-                tooltip.style.top = (e.clientY - 100) + 'px';
-                
-                // Remove any existing shading and apply new shading
-                removeShading();
-                applyShading(region);
-            } else {
-                hideTooltip();
-            }
+            showTooltipForCoords(coords, e.clientX, e.clientY);
         }, 200); // Delay to allow double-click to cancel.
     });
 
@@ -936,51 +1073,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         const coords = getMapCoordinates(e, canvas);
 
-        const maxZoomLevel = 4;
-
-        if (zoomState.level >= maxZoomLevel) {
-            return;
-        }
-
-        if (coords.mapX >= 0 && coords.mapX < 1024 && coords.mapY >= 0 && coords.mapY < 1024) {
-            // Find what address was clicked.
-            const clickedAddress = findAddressAtPixel(coords.mapX, coords.mapY);
-
-            // Round to nearest 64th boundaries.
-            const currentRange = zoomState.maxAddr - zoomState.minAddr;
-            const gridAddressSize = currentRange / 64; // 8x8 = 64 squares.
-            const gridIndex = Math.floor((clickedAddress - zoomState.minAddr) / gridAddressSize);
-            const gridStartAddr = zoomState.minAddr + gridIndex * gridAddressSize;
-            const gridEndAddr = gridStartAddr + gridAddressSize;
-
-            // Calculate new offsets based on canvas coordinates.
-            // Each 8x8 grid square becomes the new canvas, so find which grid square was clicked.
-            const gridX = Math.floor(coords.mapX / (1024 / 8)); // Which of the 8 columns.
-            const gridY = Math.floor(coords.mapY / (1024 / 8)); // Which of the 8 rows.
-            const pixelsPerGrid = 1024 / 8; // 128 pixels per grid square.
-
-            // Calculate the offset in Hilbert coordinate system (order 24).
-            const baseZoomFactor = Math.pow(2, 24 - 10); // 2^14 = 16384 (maps 2^24 coords to 1024 pixels).
-            const levelZoomFactor = Math.pow(8, zoomState.level);
-            const actualZoomFactor = baseZoomFactor / levelZoomFactor;
-
-            const newOffsetX = zoomState.offsetX + gridX * pixelsPerGrid * actualZoomFactor;
-            const newOffsetY = zoomState.offsetY + gridY * pixelsPerGrid * actualZoomFactor;
-
-            // Prepare new zoom state
-            const newZoomState = {
-                level: zoomState.level + 1,
-                minAddr: gridStartAddr,
-                maxAddr: gridEndAddr,
-                offsetX: newOffsetX,
-                offsetY: newOffsetY
-            };
-
-            hideTooltip();
-            
-            // Trigger animated zoom instead of immediate update
-            animateZoom(gridX, gridY, newZoomState);
-        }
+        maybePerformZoom(coords);
     });
 
     // Click outside map area to dismiss.
@@ -1021,43 +1114,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 clientY: touch.clientY
             }, canvas);
             
-            const maxZoomLevel = 4;
-            
-            if (zoomState.level >= maxZoomLevel) {
-                return;
-            }
-            
-            if (coords.mapX >= 0 && coords.mapX < 1024 && coords.mapY >= 0 && coords.mapY < 1024) {
-                // Same zoom logic as double-click
-                const clickedAddress = findAddressAtPixel(coords.mapX, coords.mapY);
-                const currentRange = zoomState.maxAddr - zoomState.minAddr;
-                const gridAddressSize = currentRange / 64;
-                const gridIndex = Math.floor((clickedAddress - zoomState.minAddr) / gridAddressSize);
-                const gridStartAddr = zoomState.minAddr + gridIndex * gridAddressSize;
-                const gridEndAddr = gridStartAddr + gridAddressSize;
-                
-                const gridX = Math.floor(coords.mapX / (1024 / 8));
-                const gridY = Math.floor(coords.mapY / (1024 / 8));
-                const pixelsPerGrid = 1024 / 8;
-                
-                const baseZoomFactor = Math.pow(2, 24 - 10);
-                const levelZoomFactor = Math.pow(8, zoomState.level);
-                const actualZoomFactor = baseZoomFactor / levelZoomFactor;
-                
-                const newOffsetX = zoomState.offsetX + gridX * pixelsPerGrid * actualZoomFactor;
-                const newOffsetY = zoomState.offsetY + gridY * pixelsPerGrid * actualZoomFactor;
-                
-                const newZoomState = {
-                    level: zoomState.level + 1,
-                    minAddr: gridStartAddr,
-                    maxAddr: gridEndAddr,
-                    offsetX: newOffsetX,
-                    offsetY: newOffsetY
-                };
-                
-                hideTooltip();
-                animateZoom(gridX, gridY, newZoomState);
-            }
+            maybePerformZoom(coords);
             
             lastTouchTime = 0; // Reset to prevent triple-tap
         } else {
@@ -1068,29 +1125,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     clientX: touch.clientX,
                     clientY: touch.clientY
                 }, canvas);
-                const address = findAddressAtPixel(coords.mapX, coords.mapY);
-                const region = findRegionFromAddress(address);
-                
-                if (region) {
-                    const size = region.end - region.start;
-                    const sizeHex = '0x' + size.toString(16);
-                    const sizeApprox = formatBytes(size);
-                    
-                    const startAlignment = getAlignment(region.start);
-                    const endAlignment = getAlignment(region.end);
-                    const startAlignmentStr = formatBytes(startAlignment);
-                    const endAlignmentStr = formatBytes(endAlignment);
-                    
-                    tooltip.innerHTML = `<span class="tooltip-close" onclick="hideTooltip()">&times;</span>${region.name}<br>0x${region.start.toString(16)} - 0x${region.end.toString(16)}<br>Size: ${sizeHex} (ca. ${sizeApprox})<br>Start alignment: ${startAlignmentStr}<br>End alignment: ${endAlignmentStr}`;
-                    tooltip.style.display = 'block';
-                    tooltip.style.left = touch.clientX + 'px';
-                    tooltip.style.top = (touch.clientY - 100) + 'px';
-                    
-                    removeShading();
-                    applyShading(region);
-                } else {
-                    hideTooltip();
-                }
+                showTooltipForCoords(coords, touch.clientX, touch.clientY);
             }, 200);
             
             lastTouchTime = currentTime;
@@ -1115,5 +1150,29 @@ document.addEventListener('DOMContentLoaded', async function() {
                 updateCanvas();
             }
         }, 250); // 250ms debounce delay
+    });
+    
+    // Browser back/forward button support
+    window.addEventListener('popstate', function(event) {
+        // Don't handle popstate during animations
+        if (animationState.isAnimating) {
+            return;
+        }
+        
+        // Store current state to compare
+        const oldState = zoomState.copy();
+        
+        // Try to parse URL state (returns true if URL had zoom params)
+        const urlHadZoomParams = parseURLState();
+        
+        // If URL had no zoom params, reset to default state
+        if (!urlHadZoomParams) {
+            zoomState.reset();
+        }
+        
+        if (!oldState.equals(zoomState)) {
+            hideTooltip();
+            updateCanvas();
+        }
     });
 });

@@ -72,7 +72,9 @@ canvas {
 #memoryCanvas {
     position: absolute;
     top: calc(100% * 100 / (1024 + 100 + 100));
+    /* Position based on: leftBorder(100) / (mapSize(1024) + leftBorder(100) + rightBorder(450)) */
     left: calc(100% * 100 / (1024 + 100 + 450));
+    /* Width based on: mapSize(1024) / (mapSize(1024) + leftBorder(100) + rightBorder(450)) */
     width: calc(100% * 1024 / (1024 + 100 + 450));
     aspect-ratio: 1;
     z-index: 2;
@@ -171,8 +173,10 @@ canvas {
     #memoryCanvas {
         /* Mobile positioning - inherit desktop top, adjust left for mobile */
         position: absolute !important;
-        left: calc(100% * 100 / (1024 + 100 + 100)) !important; /* 100/1224 for mobile left border */
-        width: calc(100% * 1024 / (1024 + 100 + 100)) !important; /* 1024/1224 for mobile width */
+        /* Mobile: leftBorder(100) / (mapSize(1024) + leftBorder(100) + rightBorderMobile(100)) */
+        left: calc(100% * 100 / (1024 + 100 + 100)) !important;
+        /* Mobile: mapSize(1024) / (mapSize(1024) + leftBorder(100) + rightBorderMobile(100)) */
+        width: calc(100% * 1024 / (1024 + 100 + 100)) !important;
         aspect-ratio: 1 !important;
         order: 1;
         margin-top: 0;
