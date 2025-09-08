@@ -3,7 +3,11 @@ let originalTextContent = '';
 let colorMap = new Map();
 let colorIndex = 0;
 let highlightedRegion = null;
+let currentTooltipRegion = null;
+let currentTooltipX = null;
+let currentTooltipY = null;
 let originalCanvasData = null;
+let visibleCanvases = new Map(); // Map of canvas elements to their zoom states
 // Layout constants
 const MAP = {
     WIDTH: 1024,              // Memory map canvas width
@@ -53,7 +57,97 @@ class ZoomState {
     }
 }
 
+class Highlighted {
+    constructor(zoomState) {
+        this.zoomState = zoomState;  // State used for most recent redraw.
+        this.region = null;          // Region object with start and end addresses.
+        this.savedData = null;       // Saved canvas data from before the shading.
+    }
+}
+
+class Region {
+    constructor(start, end, name, color) {
+        this.start = start;
+        this.end = end;
+        this.name = name;
+        this.color = color;
+    }
+
+    toString() {
+      const from = '0x' + this.start.toString(16);
+      const to = '0x' + this.end.toString(16);
+      return `${from}-${to}`;
+    }
+}
+
+function finishCurrentAnimation() {
+    if (!animationState.isAnimating) return;
+    
+    // Remove any existing animation canvases
+    const container = document.querySelector('.canvas-container');
+    const animatingCanvases = container.querySelectorAll('canvas:not(#backgroundCanvas):not(#memoryCanvas)');
+    animatingCanvases.forEach(canvas => {
+        visibleCanvases.delete(canvas);
+        if (container.contains(canvas)) {
+            container.removeChild(canvas);
+        }
+    });
+    
+    // Reset animation state
+    animationState.isAnimating = false;
+    animationState.animationId = null;
+    
+    // Remove animating class from memory canvas
+    memoryCanvas.classList.remove('animating');
+    
+    // Restore container overflow if it was modified
+    container.style.overflow = '';
+}
+
+function createCanvas(options = {}) {
+    const canvas = document.createElement('canvas');
+    canvas.width = MAP.WIDTH;
+    canvas.height = MAP.HEIGHT;
+    canvas.style.position = 'absolute';
+    canvas.style.zIndex = options.zIndex || '3';
+    canvas.style.pointerEvents = 'none';
+    
+    // Apply transition if provided
+    if (options.transition) {
+        canvas.style.transition = options.transition;
+    }
+    
+    // Apply transform origin if provided
+    if (options.transformOrigin) {
+        canvas.style.transformOrigin = options.transformOrigin;
+    }
+    
+    return canvas;
+}
+
+function redrawAllVisibleCanvases() {
+    visibleCanvases.forEach((highlighted, canvas) => {
+        // Check if this canvas needs shading updates
+        const currentlyShadedRegion = highlighted.region;
+        const shouldBeShaded = highlightedRegion;
+
+        
+        if (currentlyShadedRegion !== shouldBeShaded) {
+            // Remove existing shading if any
+            if (currentlyShadedRegion) {
+                removeShading(canvas, highlighted);
+            }
+            
+            // Apply new shading if needed
+            if (shouldBeShaded) {
+                applyShading(shouldBeShaded, canvas, highlighted);
+            }
+        }
+    });
+}
+
 let zoomState = new ZoomState();
+let memoryCanvas = null;
 
 let animationState = {
     isAnimating: false,           // Whether we're currently animating
@@ -186,29 +280,30 @@ function getAlignment(address) {
     return alignment;
 }
 
-function applyShading(region) {
-    const canvas = document.getElementById('memoryCanvas');
+function applyShading(region, canvas, highlighted) {
+    if (!region) return;
     const ctx = canvas.getContext('2d');
     
-    // Store original canvas data
-    originalCanvasData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    highlightedRegion = region;
+    // Store original canvas data on the canvas
+    highlighted.savedData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    highlighted.region = region;
     
-    // Get image data for the entire memory canvas
+    // Get image data for the entire canvas
     const imageData = ctx.getImageData(0, 0, MAP.WIDTH, MAP.HEIGHT);
     const data = imageData.data;
     
-    // Calculate visible address range for current zoom
-    const { minAddr, maxAddr } = zoomState;
+    // Calculate visible address range for this zoom state
+    const { minAddr, maxAddr } = highlighted.zoomState;
     const bytesPerPixel = (maxAddr - minAddr) / (MAP.WIDTH * MAP.HEIGHT);
     
     // Apply shading to pixels in the highlighted region
     const startAddr = Math.max(region.start, minAddr);
     const endAddr = Math.min(region.end, maxAddr);
-    const zoomFactor = zoomState.getZoomFactor();
+
+    if (startAddr >= endAddr) return;
     
     for (let address = startAddr; address < endAddr; address += bytesPerPixel) {
-        const coords = addressToCanvasCoordinates(address, zoomState);
+        const coords = addressToCanvasCoordinates(address, highlighted.zoomState);
         
         if (coords.x >= 0 && coords.x < MAP.WIDTH && coords.y >= 0 && coords.y < MAP.HEIGHT) {
             // Check if this pixel should be highlighted based on shading pattern
@@ -227,16 +322,16 @@ function applyShading(region) {
     ctx.putImageData(imageData, 0, 0);
 }
 
-function removeShading() {
-    if (originalCanvasData) {
-        const canvas = document.getElementById('memoryCanvas');
+function removeShading(canvas, highlighted) {
+    
+    if (highlighted.savedData) {
         const ctx = canvas.getContext('2d');
         
         // Restore original canvas data
-        ctx.putImageData(originalCanvasData, 0, 0);
+        ctx.putImageData(highlighted.savedData, 0, 0);
         
-        originalCanvasData = null;
-        highlightedRegion = null;
+        highlighted.savedData = null;
+        highlighted.region = null;
     }
 }
 
@@ -279,12 +374,7 @@ function parseMemoryData(textContent) {
                         const clampedEnd = Math.min(endAddr, maxAddress);
                         const color = generateColorForName(regionName);
                         
-                        tempMemoryRanges.push({
-                            start: startAddr,
-                            end: clampedEnd,
-                            name: regionName,
-                            color: color
-                        });
+                        tempMemoryRanges.push(new Region(startAddr, clampedEnd, regionName, color));
                     }
                 }
             }
@@ -302,12 +392,7 @@ function parseMemoryData(textContent) {
                         const clampedEnd = Math.min(endAddr, maxAddress);
                         const color = generateColorForName(regionName);
                         
-                        tempMemoryRanges.push({
-                            start: startAddr,
-                            end: clampedEnd,
-                            name: regionName,
-                            color: color
-                        });
+                        tempMemoryRanges.push(new Region(startAddr, clampedEnd, regionName, color));
                     }
                 }
             }
@@ -322,7 +407,7 @@ async function applyChanges() {
     try {
         // Parse the text content using the unified parser
         regions = parseMemoryData(textContent);
-        updateCanvas();
+        updateCanvas(zoomState);
         setStatus('Changes applied to visualization');
 
         // Auto-switch to map tab to show results
@@ -339,14 +424,10 @@ async function loadMemoryMap() {
     const textContent = await response.text();
     
     regions = parseMemoryData(textContent);
-    updateCanvas();
+    updateCanvas(zoomState);
 }
 
-function updateCanvas() {
-    // Clear any existing shading
-    originalCanvasData = null;
-    highlightedRegion = null;
-
+function updateCanvas(zoomStateParam) {
     // Check if we're on mobile
     const isMobile = window.innerWidth <= 768;
     
@@ -357,8 +438,6 @@ function updateCanvas() {
     backgroundCanvas.height = MAP.HEIGHT + MAP.BORDER_TOP + MAP.BORDER_BOTTOM;
     
     // Memory map canvas (just the 1024x1024 memory data)
-    const memoryCanvas = document.getElementById('memoryCanvas');
-    const memoryCtx = memoryCanvas.getContext('2d');
     memoryCanvas.width = MAP.WIDTH;
     memoryCanvas.height = MAP.HEIGHT;
 
@@ -369,7 +448,7 @@ function updateCanvas() {
         drawBackground(backgroundCtx);
     }
     
-    drawMemoryData(memoryCtx, zoomState);
+    drawMemoryData(memoryCanvas, zoomState);
 }
 
 function xyToHilbertIndex(x, y) {
@@ -503,11 +582,6 @@ function drawBackground(ctx) {
     // Draw grid lines on background canvas with margin offsets
     drawGridLines(ctx, zoomState.level, MAP.BORDER_LEFT, MAP.BORDER_TOP);
     
-    // Punch out the transparent hole again after drawing grid lines
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillRect(MAP.BORDER_LEFT, MAP.BORDER_TOP, MAP.WIDTH, MAP.HEIGHT);
-    ctx.globalCompositeOperation = 'source-over';
-    
     // Draw scale key
     drawScaleKey(ctx, zoomState.level, bytesPerPixel, minAddr, maxAddr);
 }
@@ -524,11 +598,6 @@ function drawBackgroundMobile(ctx) {
     
     // Draw grid lines on background canvas with margin offsets
     drawGridLines(ctx, zoomState.level, MAP.BORDER_LEFT, MAP.BORDER_TOP);
-    
-    // Punch out the transparent hole again after drawing grid lines
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillRect(MAP.BORDER_LEFT, MAP.BORDER_TOP, MAP.WIDTH, MAP.HEIGHT);
-    ctx.globalCompositeOperation = 'source-over';
     
     // No scale key drawn on mobile - it goes in the HTML div below
 }
@@ -572,7 +641,8 @@ function updateMobileScaleInfo() {
     mobileScaleDiv.innerHTML = html;
 }
 
-function drawMemoryData(ctx, zoomStateParam) {
+function drawMemoryData(canvas, zoomStateParam) {
+    const ctx = canvas.getContext('2d');
     const totalPixels = MAP.WIDTH * MAP.HEIGHT;
     const minAddr = zoomStateParam.minAddr;
     const maxAddr = zoomStateParam.maxAddr;
@@ -617,6 +687,7 @@ function drawMemoryData(ctx, zoomStateParam) {
             if (coords.x >= 0 && coords.x < MAP.WIDTH &&
                 coords.y >= 0 && coords.y < MAP.HEIGHT) {
                 const dataIndex = (coords.y * MAP.WIDTH + coords.x) * 4;
+                
                 data[dataIndex] = r;     // Red
                 data[dataIndex + 1] = g; // Green
                 data[dataIndex + 2] = b; // Blue
@@ -629,7 +700,15 @@ function drawMemoryData(ctx, zoomStateParam) {
     ctx.putImageData(imageData, 0, 0);
     
     // Draw grid lines on top of the memory data
-    drawGridLines(ctx, zoomState.level);
+    drawGridLines(ctx, zoomStateParam.level);
+
+    const highlighted = new Highlighted(zoomStateParam);
+    visibleCanvases.set(canvas, highlighted);
+    const region = highlightedRegion;
+
+    if (region && region.start < zoomStateParam.maxAddr && region.end > zoomStateParam.minAddr) {
+      applyShading(region, canvas, highlighted);
+    }
 }
 
 function drawGridLines(ctx, zoomLevel, offsetX = 0, offsetY = 0) {
@@ -723,6 +802,14 @@ function drawGridLines(ctx, zoomLevel, offsetX = 0, offsetY = 0) {
     
     // Reset line dash for other drawing
     ctx.setLineDash([]);
+    
+    // If we have offsets, this is being drawn on the background canvas, so punch out the hole again
+    if (offsetX > 0 || offsetY > 0) {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = 'black';
+        ctx.fillRect(offsetX, offsetY, MAP.WIDTH, MAP.HEIGHT);
+        ctx.globalCompositeOperation = 'source-over';
+    }
 }
 
 function drawScaleKey(ctx, level, bytesPerPixel, minAddr, maxAddr) {
@@ -789,7 +876,8 @@ function drawScaleKey(ctx, level, bytesPerPixel, minAddr, maxAddr) {
 
 function hideTooltip() {
     document.getElementById('tooltip').style.display = 'none';
-    removeShading();
+    highlightedRegion = null;
+    redrawAllVisibleCanvases();
 }
 
 function isTooltipVisible() {
@@ -840,33 +928,62 @@ function showTooltipForRegion(region, clientX, clientY) {
     `;
     
     tooltip.style.display = 'block';
-    tooltip.style.left = clientX + 'px';
-    tooltip.style.top = (clientY - 100) + 'px';
+    
+    // Position tooltip under the scale key on the right
+    const isMobile = window.innerWidth <= 768;
+    const canvasContainer = document.querySelector('.canvas-container');
+    const containerRect = canvasContainer.getBoundingClientRect();
+    
+    if (isMobile) {
+        // On mobile, position tooltip below the canvas
+        tooltip.style.left = '20px';
+        tooltip.style.top = (containerRect.bottom + 20) + 'px';
+    } else {
+        // On desktop, position under the scale key
+        const keyX = MAP.BORDER_LEFT + MAP.WIDTH + MAP.KEY_OFFSET + 150;
+        const keyY = MAP.BORDER_TOP + 400 + 500; // Position below the scale key
+        tooltip.style.left = (containerRect.left + keyX) + 'px';
+        tooltip.style.top = (containerRect.top + keyY) + 'px';
+    }
     
     // Store current region and position for navigation
-    tooltip.dataset.currentRegion = currentIndex;
-    tooltip.dataset.clientX = clientX;
-    tooltip.dataset.clientY = clientY;
+    currentTooltipRegion = currentIndex;
+    currentTooltipX = clientX;
+    currentTooltipY = clientY;
     
-    // Remove any existing shading and apply new shading
-    removeShading();
-    applyShading(region);
+    // Update highlighted region and redraw all canvases
+    highlightedRegion = region;
+    redrawAllVisibleCanvases();
+}
+
+function perhapsPan(region) {
+    if (region.start >= zoomState.maxAddr || region.end <= zoomState.minAddr) {
+        const size = zoomState.maxAddr - zoomState.minAddr;
+        const newMinAddr = Math.floor(region.start / size) * size;
+        const newZoomState = getZoomStateOfAddress(zoomState, newMinAddr);
+        if (newZoomState) {
+            animatePan(zoomState, newZoomState);
+        }
+    }
 }
 
 function showPreviousRegion() {
     const tooltip = document.getElementById('tooltip');
-    const currentIndex = parseInt(tooltip.dataset.currentRegion);
+    const currentIndex = currentTooltipRegion;
     const prevIndex = currentIndex > 0 ? currentIndex - 1 : regions.length - 1;
     
     updateTooltipContent(regions[prevIndex], prevIndex);
+
+    perhapsPan(regions[prevIndex]);
 }
 
 function showNextRegion() {
     const tooltip = document.getElementById('tooltip');
-    const currentIndex = parseInt(tooltip.dataset.currentRegion);
+    const currentIndex = currentTooltipRegion;
     const nextIndex = currentIndex < regions.length - 1 ? currentIndex + 1 : 0;
     
     updateTooltipContent(regions[nextIndex], nextIndex);
+    perhapsPan(regions[nextIndex]);
 }
 
 function updateTooltipContent(region, regionIndex) {
@@ -895,11 +1012,11 @@ function updateTooltipContent(region, regionIndex) {
     if (endAlignmentEl) endAlignmentEl.textContent = `End alignment: ${endAlignmentStr}`;
     
     // Update stored region index
-    tooltip.dataset.currentRegion = regionIndex;
+    currentTooltipRegion = regionIndex;
     
-    // Update shading to highlight the new region
-    removeShading();
-    applyShading(region);
+    // Update highlighted region and redraw all canvases
+    highlightedRegion = region;
+    redrawAllVisibleCanvases();
 }
 
 function maybePerformZoom(coords) {
@@ -953,9 +1070,8 @@ function resetZoom() {
     hideTooltip();
     
     // Reset memory canvas transform and update
-    const memoryCanvas = document.getElementById('memoryCanvas');
     memoryCanvas.style.transform = '';
-    updateCanvas();
+    updateCanvas(zoomState);
     updateURLState();
 }
 
@@ -1015,7 +1131,6 @@ function animateZoomIn(gridX, gridY, newZoomState, skipURLUpdate = false) {
         return; // Already animating
     }
     
-    const memoryCanvas = document.getElementById('memoryCanvas');
     const container = document.querySelector('.canvas-container');
     
     // Add animating class to disable interactions
@@ -1025,18 +1140,13 @@ function animateZoomIn(gridX, gridY, newZoomState, skipURLUpdate = false) {
     zoomState = newZoomState;
     
     // Create animating canvas and render new zoomed content directly to it
-    const animatingCanvas = document.createElement('canvas');
-    animatingCanvas.width = MAP.WIDTH;
-    animatingCanvas.height = MAP.HEIGHT;
-    animatingCanvas.style.position = 'absolute';
-    animatingCanvas.style.zIndex = '3'; // Above the memory canvas
-    animatingCanvas.style.pointerEvents = 'none';
-    animatingCanvas.style.transition = 'transform 0.8s cubic-bezier(0.23, 1, 0.320, 1)';
-    animatingCanvas.style.transformOrigin = 'center center';
+    const animatingCanvas = createCanvas({
+        transition: 'transform 0.8s cubic-bezier(0.23, 1, 0.320, 1)',
+        transformOrigin: 'center center'
+    });
     
     // Render new zoomed content directly to the animating canvas
-    const animatingCtx = animatingCanvas.getContext('2d');
-    drawMemoryData(animatingCtx, newZoomState);
+    drawMemoryData(animatingCanvas, newZoomState);
     
     // Calculate positions
     const gridSize = 128;
@@ -1087,11 +1197,10 @@ function animateZoomIn(gridX, gridY, newZoomState, skipURLUpdate = false) {
     setTimeout(() => {
         animatingCanvas.style.transform = '';
         
-        // After animation completes, update main canvas and remove animating canvas
-        setTimeout(() => {
+        // Attach cleanup to animation completion
+        const handleAnimationEnd = () => {
             // Update the main memory canvas with new content
-            const mainCtx = memoryCanvas.getContext('2d');
-            drawMemoryData(mainCtx, newZoomState);
+            drawMemoryData(memoryCanvas, newZoomState);
             
             // Update the background canvas (legend/scale key) with new zoom state
             const backgroundCanvas = document.getElementById('backgroundCanvas');
@@ -1106,6 +1215,7 @@ function animateZoomIn(gridX, gridY, newZoomState, skipURLUpdate = false) {
             }
             
             // Clean up
+            visibleCanvases.delete(animatingCanvas);
             container.removeChild(animatingCanvas);
             animationState.isAnimating = false;
             memoryCanvas.classList.remove('animating');
@@ -1114,7 +1224,13 @@ function animateZoomIn(gridX, gridY, newZoomState, skipURLUpdate = false) {
             if (!skipURLUpdate) {
                 updateURLState();
             }
-        }, animationState.duration);
+            
+            // Remove event listener
+            animatingCanvas.removeEventListener('transitionend', handleAnimationEnd);
+        };
+        
+        // Listen for transition end
+        animatingCanvas.addEventListener('transitionend', handleAnimationEnd);
     }, 50);
 }
 
@@ -1123,7 +1239,6 @@ function animateZoomOut(oldZoomState, newZoomState, skipURLUpdate = false) {
         return; // Already animating
     }
     
-    const memoryCanvas = document.getElementById('memoryCanvas');
     const container = document.querySelector('.canvas-container');
     
     // Add animating class to disable interactions
@@ -1136,22 +1251,16 @@ function animateZoomOut(oldZoomState, newZoomState, skipURLUpdate = false) {
     const targetY = Math.floor(unroundedTargetCoords.y / 128) * 128;
 
     // Update main canvas with new content immediately (behind animation)
-    const mainCtx = memoryCanvas.getContext('2d');
-    drawMemoryData(mainCtx, newZoomState);
+    drawMemoryData(memoryCanvas, newZoomState);
     
     // Create animating canvas with old zoomed-in content
-    const animatingCanvas = document.createElement('canvas');
-    animatingCanvas.width = MAP.WIDTH;
-    animatingCanvas.height = MAP.HEIGHT;
-    animatingCanvas.style.position = 'absolute';
-    animatingCanvas.style.zIndex = '3'; // Above the memory canvas
-    animatingCanvas.style.pointerEvents = 'none';
-    animatingCanvas.style.transition = 'transform 0.8s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.8s cubic-bezier(0.25, 0.8, 0.25, 1)';
-    animatingCanvas.style.transformOrigin = 'top left';
+    const animatingCanvas = createCanvas({
+        transition: 'transform 0.8s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.8s cubic-bezier(0.25, 0.8, 0.25, 1)',
+        transformOrigin: 'top left'
+    });
     
     // Render old content to animating canvas
-    const animatingCtx = animatingCanvas.getContext('2d');
-    drawMemoryData(animatingCtx, oldZoomState);
+    drawMemoryData(animatingCanvas, oldZoomState);
     
     // Get the actual rendered position and size of the memory canvas
     const memoryCanvasRect = memoryCanvas.getBoundingClientRect();
@@ -1186,8 +1295,8 @@ function animateZoomOut(oldZoomState, newZoomState, skipURLUpdate = false) {
         animatingCanvas.style.transform = `translate(${actualTargetX}px, ${actualTargetY}px) scale(${actualEndScale})`;
         animatingCanvas.style.opacity = '0.3';
         
-        // After animation completes, remove animating canvas
-        setTimeout(() => {
+        // Attach cleanup to animation completion
+        const handleAnimationEnd = () => {
             // Update the background canvas (legend/scale key) with new zoom state
             const backgroundCanvas = document.getElementById('backgroundCanvas');
             const backgroundCtx = backgroundCanvas.getContext('2d');
@@ -1201,6 +1310,7 @@ function animateZoomOut(oldZoomState, newZoomState, skipURLUpdate = false) {
             }
             
             // Clean up
+            visibleCanvases.delete(animatingCanvas);
             container.removeChild(animatingCanvas);
             animationState.isAnimating = false;
             memoryCanvas.classList.remove('animating');
@@ -1209,11 +1319,209 @@ function animateZoomOut(oldZoomState, newZoomState, skipURLUpdate = false) {
             if (!skipURLUpdate) {
                 updateURLState();
             }
-        }, animationState.duration);
+            
+            // Remove event listener
+            animatingCanvas.removeEventListener('transitionend', handleAnimationEnd);
+        };
+        
+        // Listen for transition end
+        animatingCanvas.addEventListener('transitionend', handleAnimationEnd);
+    }, 50);
+}
+
+function getZoomStateOfAddress(currentZoomState, newMinAddr) {
+    if (currentZoomState.level === 0) {
+        return null; // Can't pan at zoom level 0
+    }
+
+    if (newMinAddr < 0) newMinAddr += Math.pow(2, 48);
+    if (newMinAddr >= Math.pow(2, 48)) newMinAddr -= Math.pow(2, 48);
+    if (newMinAddr == currentZoomState.minAddr) return null;
+    const addressRange = currentZoomState.maxAddr - currentZoomState.minAddr;
+    const newMaxAddr = newMinAddr + addressRange;
+    
+    // Calculate new offsets based on where the new min address should appear
+    // The new min address should appear at canvas coordinate (0,0)
+    const order = 24;
+    const [x24, y24] = hilbertIndexToXY(newMinAddr, order);
+    
+    // Calculate how wide the 1024x1024 canvas is in 2^24 space at this zoom level
+    const zoomFactor = currentZoomState.getZoomFactor();
+    const canvas24Width = 1024 / zoomFactor;
+    
+    // Round down to align with the canvas-sized grid squares
+    const roundedX24 = Math.floor(x24 / canvas24Width) * canvas24Width;
+    const roundedY24 = Math.floor(y24 / canvas24Width) * canvas24Width;
+    
+    return new ZoomState(
+        currentZoomState.level,
+        newMinAddr,
+        newMaxAddr,
+        roundedX24,
+        roundedY24
+    );
+}
+
+function animatePan(oldZoomState, newZoomState, skipURLUpdate = false) {
+    if (animationState.isAnimating) {
+        // Cancel current animation and finish it immediately
+        if (animationState.animationId) {
+            cancelAnimationFrame(animationState.animationId);
+        }
+        finishCurrentAnimation();
+    }
+    
+    // Determine direction from address ranges
+    const up = newZoomState.minAddr < oldZoomState.minAddr;
+    
+    const container = document.querySelector('.canvas-container');
+    
+    // Add animating class to disable interactions
+    memoryCanvas.classList.add('animating');
+    
+    // Update global zoom state
+    zoomState = newZoomState;
+    
+    // Temporarily hide overflow on container to prevent scrollbars during animation
+    const originalOverflow = container.style.overflow;
+    container.style.overflow = 'hidden';
+    
+    // Create old content canvas
+    const oldCanvas = createCanvas({
+        zIndex: '1',
+        transition: 'transform 0.8s cubic-bezier(0.25, 0.8, 0.25, 1)'
+    });
+    
+    // Create new content canvas  
+    const newCanvas = createCanvas({
+        zIndex: '1',
+        transition: 'transform 0.8s cubic-bezier(0.25, 0.8, 0.25, 1)'
+    });
+    
+    // Render content to both canvases
+    drawMemoryData(oldCanvas, oldZoomState);
+    drawMemoryData(newCanvas, newZoomState);
+    
+    // Get actual canvas positioning
+    const memoryCanvasRect = memoryCanvas.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    
+    // Position both canvases to match memory canvas
+    [oldCanvas, newCanvas].forEach(canvas => {
+        canvas.style.left = (memoryCanvasRect.left - containerRect.left) + 'px';
+        canvas.style.top = (memoryCanvasRect.top - containerRect.top) + 'px';
+        canvas.style.width = memoryCanvasRect.width + 'px';
+        canvas.style.height = memoryCanvasRect.height + 'px';
+    });
+    
+    // Determine slide direction based on offset differences in Hilbert space
+    const deltaX = newZoomState.offsetX - oldZoomState.offsetX;
+    const deltaY = newZoomState.offsetY - oldZoomState.offsetY;
+    
+    let slideX = 0, slideY = 0;
+    
+    // Use the larger delta to determine slide direction
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+        // Horizontal slide
+        if (deltaX > 0) {
+            // New content is to the right, slides in from right
+            newCanvas.style.transform = `translateX(${memoryCanvasRect.width}px)`;
+            slideX = -memoryCanvasRect.width;
+        } else {
+            // New content is to the left, slides in from left
+            newCanvas.style.transform = `translateX(-${memoryCanvasRect.width}px)`;
+            slideX = memoryCanvasRect.width;
+        }
+    } else {
+        // Vertical slide
+        if (deltaY > 0) {
+            // New content is below, slides in from bottom
+            newCanvas.style.transform = `translateY(${memoryCanvasRect.height}px)`;
+            slideY = -memoryCanvasRect.height;
+        } else {
+            // New content is above, slides in from top
+            newCanvas.style.transform = `translateY(-${memoryCanvasRect.height}px)`;
+            slideY = memoryCanvasRect.height;
+        }
+    }
+    
+    // Add canvases to container
+    container.appendChild(oldCanvas);
+    container.appendChild(newCanvas);
+    
+    // Set animation state
+    animationState.isAnimating = true;
+    animationState.startTime = performance.now();
+    
+    // Start sliding animation
+    setTimeout(() => {
+        oldCanvas.style.transform = `translate(${slideX}px, ${slideY}px)`;
+        newCanvas.style.transform = 'translate(0, 0)';
+        
+        // Attach cleanup to animation completion
+        const handleAnimationEnd = () => {
+            // Update main canvas with new content
+            drawMemoryData(memoryCanvas, newZoomState);
+            
+            // Update background canvas
+            const backgroundCanvas = document.getElementById('backgroundCanvas');
+            const backgroundCtx = backgroundCanvas.getContext('2d');
+            const isMobile = window.innerWidth <= 768;
+            
+            if (isMobile) {
+                drawBackgroundMobile(backgroundCtx);
+                updateMobileScaleInfo();
+            } else {
+                drawBackground(backgroundCtx);
+            }
+            
+            // Clean up
+            visibleCanvases.delete(oldCanvas);
+            visibleCanvases.delete(newCanvas);
+            if (container.contains(oldCanvas)) {
+                container.removeChild(oldCanvas);
+            }
+            if (container.contains(newCanvas)) {
+                container.removeChild(newCanvas);
+            }
+            
+            // Restore original overflow setting
+            container.style.overflow = originalOverflow;
+            
+            animationState.isAnimating = false;
+            memoryCanvas.classList.remove('animating');
+            
+            // Update URL state (unless triggered by browser navigation)
+            if (!skipURLUpdate) {
+                updateURLState();
+            }
+            
+            // Remove event listeners
+            oldCanvas.removeEventListener('transitionend', handleAnimationEnd);
+            newCanvas.removeEventListener('transitionend', handleAnimationEnd);
+        };
+        
+        // Listen for transition end on both canvases
+        oldCanvas.addEventListener('transitionend', handleAnimationEnd);
+        newCanvas.addEventListener('transitionend', handleAnimationEnd);
     }, 50);
 }
 
 document.addEventListener('DOMContentLoaded', async function() {
+    // Create and insert memory canvas
+    const container = document.querySelector('.canvas-container');
+    memoryCanvas = createCanvas({
+        zIndex: '1'
+    });
+    memoryCanvas.id = 'memoryCanvas';
+    
+    // Ensure the memory canvas has the correct positioning
+    memoryCanvas.style.position = 'absolute';
+    memoryCanvas.style.pointerEvents = 'auto'; // Explicitly enable pointer events
+    // Insert after background canvas
+    const backgroundCanvas = document.getElementById('backgroundCanvas');
+    container.insertBefore(memoryCanvas, backgroundCanvas.nextSibling);
+    
     // Try to load sample file first
     const sampleLoaded = await loadSampleFile();
     
@@ -1226,19 +1534,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         const urlStateRestored = parseURLState();
         if (urlStateRestored) {
             // URL contained valid zoom state, update canvas to reflect it
-            updateCanvas();
+            updateCanvas(memoryCanvas);
         }
     } else {
         // If sample file failed to load, stay on text editor
         switchTab('editor');
     }
 
-    const canvas = document.getElementById('memoryCanvas');
     const tooltip = document.getElementById('tooltip');
 
     let clickTimeout;
 
-    canvas.addEventListener('click', function(e) {
+    memoryCanvas.addEventListener('click', function(e) {
         // Don't handle clicks during animation
         if (animationState.isAnimating) {
             return;
@@ -1246,12 +1553,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         clearTimeout(clickTimeout);
         clickTimeout = setTimeout(function() {
-            const coords = getMapCoordinates(e, canvas);
+            const coords = getMapCoordinates(e, memoryCanvas);
             showTooltipForCoords(coords, e.clientX, e.clientY);
         }, 200); // Delay to allow double-click to cancel.
     });
 
-    canvas.addEventListener('dblclick', function(e) {
+    memoryCanvas.addEventListener('dblclick', function(e) {
         clearTimeout(clickTimeout); // Cancel single-click.
         
         // Don't zoom if already animating
@@ -1259,14 +1566,13 @@ document.addEventListener('DOMContentLoaded', async function() {
             return;
         }
         
-        const coords = getMapCoordinates(e, canvas);
+        const coords = getMapCoordinates(e, memoryCanvas);
 
         maybePerformZoom(coords);
     });
 
     // Click outside map area to dismiss.
     document.addEventListener('click', function(e) {
-        const memoryCanvas = document.getElementById('memoryCanvas');
         const backgroundCanvas = document.getElementById('backgroundCanvas');
         const tooltip = document.getElementById('tooltip');
         
@@ -1280,7 +1586,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     let lastTouchTime = 0;
     let touchTimeout;
     
-    canvas.addEventListener('touchstart', function(e) {
+    memoryCanvas.addEventListener('touchstart', function(e) {
         // Prevent browser zoom and scrolling
         e.preventDefault();
         
@@ -1301,7 +1607,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             const coords = getMapCoordinates({
                 clientX: touch.clientX,
                 clientY: touch.clientY
-            }, canvas);
+            }, memoryCanvas);
             
             maybePerformZoom(coords);
             
@@ -1313,7 +1619,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 const coords = getMapCoordinates({
                     clientX: touch.clientX,
                     clientY: touch.clientY
-                }, canvas);
+                }, memoryCanvas);
                 showTooltipForCoords(coords, touch.clientX, touch.clientY);
             }, 200);
             
@@ -1321,7 +1627,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     }, { passive: false });
     
-    // Keyboard shortcuts for zoom reset and tooltip navigation.
+    // Keyboard shortcuts for zoom reset, tooltip navigation, and panning.
     document.addEventListener('keydown', function(e) {
         if (e.key === 'r' || e.key === 'R') {
             resetZoom();
@@ -1331,6 +1637,19 @@ document.addEventListener('DOMContentLoaded', async function() {
         } else if (e.key === 'ArrowRight' && isTooltipVisible()) {
             e.preventDefault(); // Prevent page scrolling
             showNextRegion();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault(); // Prevent page scrolling
+            const newZoomState = getZoomStateOfAddress(zoomState, zoomState.maxAddr);
+            if (newZoomState) {
+                animatePan(zoomState, newZoomState);
+            }
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault(); // Prevent page scrolling
+            const size = zoomState.maxAddr - zoomState.minAddr;
+            const newZoomState = getZoomStateOfAddress(zoomState, zoomState.minAddr - size);
+            if (newZoomState) {
+                animatePan(zoomState, newZoomState);
+            }
         }
     });
     
@@ -1342,7 +1661,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         resizeTimeout = setTimeout(function() {
             // Only update canvas if we're not currently animating
             if (!animationState.isAnimating) {
-                updateCanvas();
+                updateCanvas(memoryCanvas);
             }
         }, 250); // 250ms debounce delay
     });
@@ -1371,6 +1690,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Detect zoom direction
             const isZoomingIn = zoomState.level > oldState.level;
             const isZoomingOut = zoomState.level < oldState.level;
+            const isPanning = zoomState.level === oldState.level && 
+                              (zoomState.minAddr !== oldState.minAddr || zoomState.maxAddr !== oldState.maxAddr);
             
             if (isZoomingIn) {
                 // For zoom in, we need to calculate which grid square to animate from
@@ -1382,9 +1703,12 @@ document.addEventListener('DOMContentLoaded', async function() {
             } else if (isZoomingOut) {
                 // For zoom out, animate the old view shrinking
                 animateZoomOut(oldState, zoomState.copy(), true);
+            } else if (isPanning) {
+                // Same zoom level but different address range - use pan animation
+                animatePan(oldState, zoomState.copy(), true);
             } else {
-                // Same zoom level but different position (pan), just update without animation
-                updateCanvas();
+                // No change or other state change, just update without animation
+                updateCanvas(zoomState);
             }
         }
     });
