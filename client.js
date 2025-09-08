@@ -47,13 +47,9 @@ class ZoomState {
         return new ZoomState(this.level, this.minAddr, this.maxAddr, this.offsetX, this.offsetY);
     }
 
-    // Reset to default state
+    // Reset to default state - returns new ZoomState object
     reset() {
-        this.level = 0;
-        this.minAddr = 0;
-        this.maxAddr = Math.pow(2, 48);
-        this.offsetX = 0;
-        this.offsetY = 0;
+        return new ZoomState(0, 0, Math.pow(2, 48), 0, 0);
     }
 }
 
@@ -212,20 +208,13 @@ function applyShading(region) {
     const zoomFactor = zoomState.getZoomFactor();
     
     for (let address = startAddr; address < endAddr; address += bytesPerPixel) {
-        // Get coordinates in 2^24 coordinate system
-        const order = 24;
-        const [x24, y24] = hilbertIndexToXY(address, order);
+        const coords = addressToCanvasCoordinates(address, zoomState);
         
-        // Scale from 2^24 to 1024 and apply offset
-        
-        const scaledX = Math.floor((x24 - zoomState.offsetX) * zoomFactor);
-        const scaledY = Math.floor((y24 - zoomState.offsetY) * zoomFactor);
-        
-        if (scaledX >= 0 && scaledX < MAP.WIDTH && scaledY >= 0 && scaledY < MAP.HEIGHT) {
+        if (coords.x >= 0 && coords.x < MAP.WIDTH && coords.y >= 0 && coords.y < MAP.HEIGHT) {
             // Check if this pixel should be highlighted based on shading pattern
-            const shadingValue = (scaledX + scaledY) % 8;
+            const shadingValue = (coords.x + coords.y) % 8;
             if (shadingValue >= 2 && shadingValue <= 4) {
-                const dataIndex = (scaledY * MAP.WIDTH + scaledX) * 4;
+                const dataIndex = (coords.y * MAP.WIDTH + coords.x) * 4;
                 data[dataIndex] = 255;     // Red = white
                 data[dataIndex + 1] = 255; // Green = white  
                 data[dataIndex + 2] = 255; // Blue = white
@@ -380,7 +369,7 @@ function updateCanvas() {
         drawBackground(backgroundCtx);
     }
     
-    drawMemoryData(memoryCtx);
+    drawMemoryData(memoryCtx, zoomState);
 }
 
 function xyToHilbertIndex(x, y) {
@@ -427,6 +416,19 @@ function hilbertIndexToXY(index, order) {
     }
 
     return [x, y];
+}
+
+function addressToCanvasCoordinates(address, zoomStateParam) {
+    // Get coordinates in 2^24 coordinate system
+    const order = 24;
+    const [x24, y24] = hilbertIndexToXY(address, order);
+    
+    // Scale from 2^24 to 1024 and apply zoom offset
+    const zoomFactor = zoomStateParam.getZoomFactor();
+    const scaledX = Math.floor((x24 - zoomStateParam.offsetX) * zoomFactor);
+    const scaledY = Math.floor((y24 - zoomStateParam.offsetY) * zoomFactor);
+    
+    return { x: scaledX, y: scaledY, toString: function() { return "(" + this.x + "," + this.y + ")"; } }
 }
 
 function getMapCoordinates(e, memoryCanvas) {
@@ -493,12 +495,18 @@ function drawBackground(ctx) {
     ctx.fillStyle = '#C0C0C0';
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // Black background for the actual map area
-    ctx.fillStyle = '#000000';
+    // Create transparent hole for the map area using composite operation
+    ctx.globalCompositeOperation = 'destination-out';
     ctx.fillRect(MAP.BORDER_LEFT, MAP.BORDER_TOP, MAP.WIDTH, MAP.HEIGHT);
+    ctx.globalCompositeOperation = 'source-over';
 
     // Draw grid lines on background canvas with margin offsets
     drawGridLines(ctx, zoomState.level, MAP.BORDER_LEFT, MAP.BORDER_TOP);
+    
+    // Punch out the transparent hole again after drawing grid lines
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillRect(MAP.BORDER_LEFT, MAP.BORDER_TOP, MAP.WIDTH, MAP.HEIGHT);
+    ctx.globalCompositeOperation = 'source-over';
     
     // Draw scale key
     drawScaleKey(ctx, zoomState.level, bytesPerPixel, minAddr, maxAddr);
@@ -509,12 +517,18 @@ function drawBackgroundMobile(ctx) {
     ctx.fillStyle = '#C0C0C0';
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // Black background for the actual map area
-    ctx.fillStyle = '#000000';
+    // Create transparent hole for the map area using composite operation
+    ctx.globalCompositeOperation = 'destination-out';
     ctx.fillRect(MAP.BORDER_LEFT, MAP.BORDER_TOP, MAP.WIDTH, MAP.HEIGHT);
+    ctx.globalCompositeOperation = 'source-over';
     
     // Draw grid lines on background canvas with margin offsets
     drawGridLines(ctx, zoomState.level, MAP.BORDER_LEFT, MAP.BORDER_TOP);
+    
+    // Punch out the transparent hole again after drawing grid lines
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillRect(MAP.BORDER_LEFT, MAP.BORDER_TOP, MAP.WIDTH, MAP.HEIGHT);
+    ctx.globalCompositeOperation = 'source-over';
     
     // No scale key drawn on mobile - it goes in the HTML div below
 }
@@ -558,18 +572,25 @@ function updateMobileScaleInfo() {
     mobileScaleDiv.innerHTML = html;
 }
 
-function drawMemoryData(ctx) {
+function drawMemoryData(ctx, zoomStateParam) {
     const totalPixels = MAP.WIDTH * MAP.HEIGHT;
-    const minAddr = zoomState.minAddr;
-    const maxAddr = zoomState.maxAddr;
+    const minAddr = zoomStateParam.minAddr;
+    const maxAddr = zoomStateParam.maxAddr;
     const addressRange = maxAddr - minAddr;
     const bytesPerPixel = addressRange / totalPixels;
 
-    // Black background for the memory canvas
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, MAP.WIDTH, MAP.HEIGHT);
+    // Create image data for the memory canvas and initialize with opaque black pixels
+    const imageData = ctx.createImageData(MAP.WIDTH, MAP.HEIGHT);
+    const data = imageData.data;
+    
+    // Initialize all pixels to opaque black (R=0, G=0, B=0, A=255)
+    for (let i = 3; i < data.length; i += 4) {
+        data[i] = 255; // Set alpha channel to opaque
+    }
 
     if (regions.length === 0) {
+        // Put the empty (black) image data and return
+        ctx.putImageData(imageData, 0, 0);
         return;
     }
 
@@ -578,12 +599,8 @@ function drawMemoryData(ctx) {
         range.end > minAddr && range.start < maxAddr
     );
 
-    // Create image data for the memory canvas
-    const imageData = ctx.getImageData(0, 0, MAP.WIDTH, MAP.HEIGHT);
-    const data = imageData.data;
-
     // Get zoom factor once outside of loops
-    const zoomFactor = zoomState.getZoomFactor();
+    const zoomFactor = zoomStateParam.getZoomFactor();
 
     // Process each visible memory range
     visibleRanges.forEach(range => {
@@ -595,18 +612,11 @@ function drawMemoryData(ctx) {
 
         // Fill pixels for this memory range
         for (let address = startAddr; address < endAddr; address += bytesPerPixel) {
-            // Get coordinates in 2^24 coordinate system
-            const order = 24;
-            const [x24, y24] = hilbertIndexToXY(address, order);
+            const coords = addressToCanvasCoordinates(address, zoomStateParam);
 
-            // Scale from 2^24 to 1024 and apply offset
-
-            const scaledX = Math.floor((x24 - zoomState.offsetX) * zoomFactor);
-            const scaledY = Math.floor((y24 - zoomState.offsetY) * zoomFactor);
-
-            if (scaledX >= 0 && scaledX < MAP.WIDTH &&
-                scaledY >= 0 && scaledY < MAP.HEIGHT) {
-                const dataIndex = (scaledY * MAP.WIDTH + scaledX) * 4;
+            if (coords.x >= 0 && coords.x < MAP.WIDTH &&
+                coords.y >= 0 && coords.y < MAP.HEIGHT) {
+                const dataIndex = (coords.y * MAP.WIDTH + coords.x) * 4;
                 data[dataIndex] = r;     // Red
                 data[dataIndex + 1] = g; // Green
                 data[dataIndex + 2] = b; // Blue
@@ -913,15 +923,15 @@ function maybePerformZoom(coords) {
     
     // Calculate new offsets based on canvas coordinates.
     // Each 8x8 grid square becomes the new canvas, so find which grid square was clicked.
-    const gridX = Math.floor(coords.mapX / (1024 / 8)); // Which of the 8 columns.
-    const gridY = Math.floor(coords.mapY / (1024 / 8)); // Which of the 8 rows.
     const pixelsPerGrid = 1024 / 8; // 128 pixels per grid square.
+    const gridX = Math.floor(coords.mapX / pixelsPerGrid) * pixelsPerGrid; // Which of the 8 columns.
+    const gridY = Math.floor(coords.mapY / pixelsPerGrid) * pixelsPerGrid; // Which of the 8 rows.
     
     // Calculate the offset in Hilbert coordinate system (order 24).
     const zoomFactor = zoomState.getZoomFactor();
     
-    const newOffsetX = zoomState.offsetX + gridX * pixelsPerGrid / zoomFactor;
-    const newOffsetY = zoomState.offsetY + gridY * pixelsPerGrid / zoomFactor;
+    const newOffsetX = zoomState.offsetX + gridX / zoomFactor;
+    const newOffsetY = zoomState.offsetY + gridY / zoomFactor;
     
     // Prepare new zoom state
     const newZoomState = new ZoomState(
@@ -935,11 +945,11 @@ function maybePerformZoom(coords) {
     hideTooltip();
     
     // Trigger animated zoom
-    animateZoom(gridX, gridY, newZoomState);
+    animateZoomIn(gridX, gridY, newZoomState);
 }
 
 function resetZoom() {
-    zoomState.reset();
+    zoomState = zoomState.reset();
     hideTooltip();
     
     // Reset memory canvas transform and update
@@ -1000,7 +1010,7 @@ function parseURLState() {
     return false; // No valid state in URL
 }
 
-function animateZoom(gridX, gridY, newZoomState) {
+function animateZoomIn(gridX, gridY, newZoomState, skipURLUpdate = false) {
     if (animationState.isAnimating) {
         return; // Already animating
     }
@@ -1011,18 +1021,10 @@ function animateZoom(gridX, gridY, newZoomState) {
     // Add animating class to disable interactions
     memoryCanvas.classList.add('animating');
     
-    // Create off-screen canvas with new zoomed content
-    const offScreenCanvas = document.createElement('canvas');
-    offScreenCanvas.width = MAP.WIDTH;
-    offScreenCanvas.height = MAP.HEIGHT;
-    const offScreenCtx = offScreenCanvas.getContext('2d');
+    // Update global zoom state for the new zoom level
+    zoomState = newZoomState;
     
-    // Render new zoomed content to off-screen canvas
-    const oldZoomState = zoomState.copy();
-    Object.assign(zoomState, newZoomState);
-    drawMemoryData(offScreenCtx);
-    
-    // Create DOM element from off-screen canvas and position it
+    // Create animating canvas and render new zoomed content directly to it
     const animatingCanvas = document.createElement('canvas');
     animatingCanvas.width = MAP.WIDTH;
     animatingCanvas.height = MAP.HEIGHT;
@@ -1032,14 +1034,14 @@ function animateZoom(gridX, gridY, newZoomState) {
     animatingCanvas.style.transition = 'transform 0.8s cubic-bezier(0.23, 1, 0.320, 1)';
     animatingCanvas.style.transformOrigin = 'center center';
     
-    // Copy the off-screen content to the animating canvas
+    // Render new zoomed content directly to the animating canvas
     const animatingCtx = animatingCanvas.getContext('2d');
-    animatingCtx.drawImage(offScreenCanvas, 0, 0);
+    drawMemoryData(animatingCtx, newZoomState);
     
     // Calculate positions
     const gridSize = 128;
-    const gridCenterX = (gridX * gridSize) + (gridSize / 2);
-    const gridCenterY = (gridY * gridSize) + (gridSize / 2);
+    const gridCenterX = gridX + (gridSize / 2);
+    const gridCenterY = gridY + (gridSize / 2);
     const canvasCenterX = 512;
     const canvasCenterY = 512;
     
@@ -1060,12 +1062,13 @@ function animateZoom(gridX, gridY, newZoomState) {
     
     // Calculate scale based on actual rendered canvas size vs original 1024px
     const actualCanvasWidth = memoryCanvasRect.width;
+    const actualCanvasHeight = memoryCanvasRect.height;
     const actualGridSize = (gridSize / 1024) * actualCanvasWidth;
     const actualStartScale = actualGridSize / actualCanvasWidth;
     
     // Calculate translation based on actual rendered dimensions
-    const actualGridCenterX = (gridX * actualGridSize) + (actualGridSize / 2);
-    const actualGridCenterY = (gridY * actualGridSize) + (actualGridSize / 2);
+    const actualGridCenterX = ((gridX / 1024) * actualCanvasWidth) + (actualGridSize / 2);
+    const actualGridCenterY = ((gridY / 1024 ) * actualCanvasHeight) + (actualGridSize / 2);
     const actualCanvasCenterX = actualCanvasWidth / 2;
     const actualCanvasCenterY = memoryCanvasRect.height / 2;
     const actualStartTranslateX = actualGridCenterX - actualCanvasCenterX;
@@ -1088,7 +1091,7 @@ function animateZoom(gridX, gridY, newZoomState) {
         setTimeout(() => {
             // Update the main memory canvas with new content
             const mainCtx = memoryCanvas.getContext('2d');
-            mainCtx.drawImage(offScreenCanvas, 0, 0);
+            drawMemoryData(mainCtx, newZoomState);
             
             // Update the background canvas (legend/scale key) with new zoom state
             const backgroundCanvas = document.getElementById('backgroundCanvas');
@@ -1107,8 +1110,105 @@ function animateZoom(gridX, gridY, newZoomState) {
             animationState.isAnimating = false;
             memoryCanvas.classList.remove('animating');
             
-            // Update URL state after zoom completes
-            updateURLState();
+            // Update URL state after zoom completes (unless triggered by browser navigation)
+            if (!skipURLUpdate) {
+                updateURLState();
+            }
+        }, animationState.duration);
+    }, 50);
+}
+
+function animateZoomOut(oldZoomState, newZoomState, skipURLUpdate = false) {
+    if (animationState.isAnimating) {
+        return; // Already animating
+    }
+    
+    const memoryCanvas = document.getElementById('memoryCanvas');
+    const container = document.querySelector('.canvas-container');
+    
+    // Add animating class to disable interactions
+    memoryCanvas.classList.add('animating');
+    
+    // Get target coordinates where the old view should shrink to in the new zoom level
+    const unroundedTargetCoords = addressToCanvasCoordinates(oldZoomState.minAddr, newZoomState);
+
+    const targetX = Math.floor(unroundedTargetCoords.x / 128) * 128;
+    const targetY = Math.floor(unroundedTargetCoords.y / 128) * 128;
+
+    // Update main canvas with new content immediately (behind animation)
+    const mainCtx = memoryCanvas.getContext('2d');
+    drawMemoryData(mainCtx, newZoomState);
+    
+    // Create animating canvas with old zoomed-in content
+    const animatingCanvas = document.createElement('canvas');
+    animatingCanvas.width = MAP.WIDTH;
+    animatingCanvas.height = MAP.HEIGHT;
+    animatingCanvas.style.position = 'absolute';
+    animatingCanvas.style.zIndex = '3'; // Above the memory canvas
+    animatingCanvas.style.pointerEvents = 'none';
+    animatingCanvas.style.transition = 'transform 0.8s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.8s cubic-bezier(0.25, 0.8, 0.25, 1)';
+    animatingCanvas.style.transformOrigin = 'top left';
+    
+    // Render old content to animating canvas
+    const animatingCtx = animatingCanvas.getContext('2d');
+    drawMemoryData(animatingCtx, oldZoomState);
+    
+    // Get the actual rendered position and size of the memory canvas
+    const memoryCanvasRect = memoryCanvas.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    
+    // Position the animating canvas at the same location as the memory canvas
+    animatingCanvas.style.left = (memoryCanvasRect.left - containerRect.left) + 'px';
+    animatingCanvas.style.top = (memoryCanvasRect.top - containerRect.top) + 'px';
+    animatingCanvas.style.width = memoryCanvasRect.width + 'px';
+    animatingCanvas.style.height = memoryCanvasRect.height + 'px';
+    
+    // Start at full size
+    animatingCanvas.style.transform = '';
+    animatingCanvas.style.opacity = '1';
+    
+    // Add to container
+    container.appendChild(animatingCanvas);
+    
+    // Set animation state
+    animationState.isAnimating = true;
+    animationState.startTime = performance.now();
+    
+    const gridSize = 128;
+    const actualEndScale = gridSize / 1024;
+    
+    // Scale target coordinates to match actual rendered canvas size
+    const actualTargetX = (targetX / 1024) * memoryCanvasRect.width;
+    const actualTargetY = (targetY / 1024) * memoryCanvasRect.height;
+    
+    // Start animation to target position, scale, and fade out
+    setTimeout(() => {
+        animatingCanvas.style.transform = `translate(${actualTargetX}px, ${actualTargetY}px) scale(${actualEndScale})`;
+        animatingCanvas.style.opacity = '0.3';
+        
+        // After animation completes, remove animating canvas
+        setTimeout(() => {
+            // Update the background canvas (legend/scale key) with new zoom state
+            const backgroundCanvas = document.getElementById('backgroundCanvas');
+            const backgroundCtx = backgroundCanvas.getContext('2d');
+            const isMobile = window.innerWidth <= 768;
+            
+            if (isMobile) {
+                drawBackgroundMobile(backgroundCtx);
+                updateMobileScaleInfo();
+            } else {
+                drawBackground(backgroundCtx);
+            }
+            
+            // Clean up
+            container.removeChild(animatingCanvas);
+            animationState.isAnimating = false;
+            memoryCanvas.classList.remove('animating');
+            
+            // Update URL state after zoom completes (unless triggered by browser navigation)
+            if (!skipURLUpdate) {
+                updateURLState();
+            }
         }, animationState.duration);
     }, 50);
 }
@@ -1262,12 +1362,30 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         // If URL had no zoom params, reset to default state
         if (!urlHadZoomParams) {
-            zoomState.reset();
+            zoomState = zoomState.reset();
         }
         
         if (!oldState.equals(zoomState)) {
             hideTooltip();
-            updateCanvas();
+            
+            // Detect zoom direction
+            const isZoomingIn = zoomState.level > oldState.level;
+            const isZoomingOut = zoomState.level < oldState.level;
+            
+            if (isZoomingIn) {
+                // For zoom in, we need to calculate which grid square to animate from
+                // This is an approximation - we'll use the center of the new view
+                zoomInCoords = addressToCanvasCoordinates(zoomState.minAddr, oldState);
+                const gridX = Math.floor(zoomInCoords.x / 128) * 128;
+                const gridY = Math.floor(zoomInCoords.y / 128) * 128;
+                animateZoomIn(gridX, gridY, zoomState.copy(), true);
+            } else if (isZoomingOut) {
+                // For zoom out, animate the old view shrinking
+                animateZoomOut(oldState, zoomState.copy(), true);
+            } else {
+                // Same zoom level but different position (pan), just update without animation
+                updateCanvas();
+            }
         }
     });
 });
