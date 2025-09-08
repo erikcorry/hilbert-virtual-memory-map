@@ -22,12 +22,21 @@ const MAP = {
 };
 
 class ZoomState {
-    constructor(level = 0, minAddr = 0, maxAddr = Math.pow(2, 48), offsetX = 0, offsetY = 0) {
+    constructor(level = 0, minAddr = 0, maxAddr = Math.pow(2, 48), x24 = 0, y24 = 0) {
         this.level = level;         // Current zoom level (0 = full view)
         this.minAddr = minAddr;     // Lowest address in current view
         this.maxAddr = maxAddr;     // Highest address in current view (256 TiB)
-        this.offsetX = offsetX;     // X offset in 2^24 coordinate system
-        this.offsetY = offsetY;     // Y offset in 2^24 coordinate system
+
+        // Calculate how wide the 1024x1024 canvas is in 2^24 space at this zoom level
+        const zoomFactor = this.getZoomFactor();
+        const canvas24Width = 1024 / zoomFactor;
+        
+        // Round down to align with the canvas-sized grid squares
+        const roundedX24 = Math.floor(x24 / canvas24Width) * canvas24Width;
+        const roundedY24 = Math.floor(y24 / canvas24Width) * canvas24Width;
+
+        this.offsetX = roundedX24;     // X offset in 2^24 coordinate system
+        this.offsetY = roundedY24;     // Y offset in 2^24 coordinate system
     }
 
     // Check if this zoom state equals another
@@ -46,14 +55,15 @@ class ZoomState {
         return levelZoomFactor / baseZoomFactor;
     }
 
-    // Create a copy of this zoom state
-    copy() {
-        return new ZoomState(this.level, this.minAddr, this.maxAddr, this.offsetX, this.offsetY);
-    }
-
     // Reset to default state - returns new ZoomState object
     reset() {
         return new ZoomState(0, 0, Math.pow(2, 48), 0, 0);
+    }
+
+    toString() {
+        const minHex = '0x' + this.minAddr.toString(16);
+        const maxHex = '0x' + this.maxAddr.toString(16);
+        return `ZoomState(level=${this.level}, ${minHex}-${maxHex}, offset=${this.offsetX},${this.offsetY})`;
     }
 }
 
@@ -472,7 +482,7 @@ function xyToHilbertIndex(x, y) {
     return index;
 }
 
-function hilbertIndexToXY(index, order) {
+function hilbertIndexToXY(index, order = 24) {
     const n = 1 << order;
     let x = 0, y = 0;
     let t = index;
@@ -499,8 +509,7 @@ function hilbertIndexToXY(index, order) {
 
 function addressToCanvasCoordinates(address, zoomStateParam) {
     // Get coordinates in 2^24 coordinate system
-    const order = 24;
-    const [x24, y24] = hilbertIndexToXY(address, order);
+    const [x24, y24] = hilbertIndexToXY(address);
     
     // Scale from 2^24 to 1024 and apply zoom offset
     const zoomFactor = zoomStateParam.getZoomFactor();
@@ -1065,6 +1074,41 @@ function maybePerformZoom(coords) {
     animateZoomIn(gridX, gridY, newZoomState);
 }
 
+function zoomOut() {
+    if (zoomState.level === 0) {
+        return; // Already at minimum zoom
+    }
+    
+    if (animationState.isAnimating) {
+        // Cancel current animation and finish it immediately
+        if (animationState.animationId) {
+            cancelAnimationFrame(animationState.animationId);
+        }
+        finishCurrentAnimation();
+    }
+    
+    // Calculate new zoom level
+    const newLevel = zoomState.level - 1;
+    
+    // Calculate the address range for the new zoom level
+    const zoomFactor = Math.pow(8, newLevel);
+    const totalAddressSpace = Math.pow(2, 48);
+    const newAddressRange = totalAddressSpace / (zoomFactor * zoomFactor);
+    
+    // Round the current minAddr to align with the new zoom level grid
+    const newMinAddr = Math.floor(zoomState.minAddr / newAddressRange) * newAddressRange;
+    const newMaxAddr = newMinAddr + newAddressRange;
+    
+    // Calculate new offsets based on the new min address
+    const [x24, y24] = hilbertIndexToXY(newMinAddr);
+    
+    const oldZoomState = zoomState;
+    zoomState = new ZoomState(newLevel, newMinAddr, newMaxAddr, x24, y24);
+
+    hideTooltip();
+    animateZoomOut(oldZoomState, zoomState);
+}
+
 function resetZoom() {
     zoomState = zoomState.reset();
     hideTooltip();
@@ -1112,13 +1156,8 @@ function parseURLState() {
         if (!isNaN(level) && !isNaN(minAddr) && !isNaN(maxAddr) && 
             !isNaN(offsetX) && !isNaN(offsetY) && 
             level >= 0 && level <= 4) {
-            
-            zoomState.level = level;
-            zoomState.minAddr = minAddr;
-            zoomState.maxAddr = maxAddr;
-            zoomState.offsetX = offsetX;
-            zoomState.offsetY = offsetY;
-            
+
+            zoomState = new ZoomState(level, minAddr, maxAddr, offsetX, offsetY);
             return true; // State was restored from URL
         }
     }
@@ -1342,23 +1381,14 @@ function getZoomStateOfAddress(currentZoomState, newMinAddr) {
     
     // Calculate new offsets based on where the new min address should appear
     // The new min address should appear at canvas coordinate (0,0)
-    const order = 24;
-    const [x24, y24] = hilbertIndexToXY(newMinAddr, order);
-    
-    // Calculate how wide the 1024x1024 canvas is in 2^24 space at this zoom level
-    const zoomFactor = currentZoomState.getZoomFactor();
-    const canvas24Width = 1024 / zoomFactor;
-    
-    // Round down to align with the canvas-sized grid squares
-    const roundedX24 = Math.floor(x24 / canvas24Width) * canvas24Width;
-    const roundedY24 = Math.floor(y24 / canvas24Width) * canvas24Width;
+    const [x24, y24] = hilbertIndexToXY(newMinAddr);
     
     return new ZoomState(
         currentZoomState.level,
         newMinAddr,
         newMaxAddr,
-        roundedX24,
-        roundedY24
+        x24,
+        y24
     );
 }
 
@@ -1627,10 +1657,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     }, { passive: false });
     
-    // Keyboard shortcuts for zoom reset, tooltip navigation, and panning.
+    // Keyboard shortcuts for zoom reset, zoom out, tooltip navigation, and panning.
     document.addEventListener('keydown', function(e) {
         if (e.key === 'r' || e.key === 'R') {
             resetZoom();
+        } else if (e.key === 'u' || e.key === 'U') {
+            zoomOut();
         } else if (e.key === 'ArrowLeft' && isTooltipVisible()) {
             e.preventDefault(); // Prevent page scrolling
             showPreviousRegion();
@@ -1674,7 +1706,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
         
         // Store current state to compare
-        const oldState = zoomState.copy();
+        const oldState = zoomState;
         
         // Try to parse URL state (returns true if URL had zoom params)
         const urlHadZoomParams = parseURLState();
@@ -1699,13 +1731,13 @@ document.addEventListener('DOMContentLoaded', async function() {
                 zoomInCoords = addressToCanvasCoordinates(zoomState.minAddr, oldState);
                 const gridX = Math.floor(zoomInCoords.x / 128) * 128;
                 const gridY = Math.floor(zoomInCoords.y / 128) * 128;
-                animateZoomIn(gridX, gridY, zoomState.copy(), true);
+                animateZoomIn(gridX, gridY, zoomState, true);
             } else if (isZoomingOut) {
                 // For zoom out, animate the old view shrinking
-                animateZoomOut(oldState, zoomState.copy(), true);
+                animateZoomOut(oldState, zoomState, true);
             } else if (isPanning) {
                 // Same zoom level but different address range - use pan animation
-                animatePan(oldState, zoomState.copy(), true);
+                animatePan(oldState, zoomState, true);
             } else {
                 // No change or other state change, just update without animation
                 updateCanvas(zoomState);
