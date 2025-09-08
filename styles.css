@@ -158,6 +158,35 @@ canvas {
     color: #000;
 }
 
+.tooltip-nav {
+    background: #007bff;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: normal;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s ease;
+    line-height: 1;
+    font-family: Arial, sans-serif;
+    padding: 0;
+    margin: 0;
+    vertical-align: middle;
+}
+
+.tooltip-nav:hover {
+    background: #0056b3;
+}
+
+.tooltip-nav:active {
+    transform: scale(0.95);
+}
+
 /* Mobile responsive layout */
 @media screen and (max-width: 768px) {
     .canvas-container {

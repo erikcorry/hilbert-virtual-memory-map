@@ -497,7 +497,10 @@ function drawBackground(ctx) {
     ctx.fillStyle = '#000000';
     ctx.fillRect(MAP.BORDER_LEFT, MAP.BORDER_TOP, MAP.WIDTH, MAP.HEIGHT);
 
-    // Draw scale key (but not grid lines - those go on memory canvas)
+    // Draw grid lines on background canvas with margin offsets
+    drawGridLines(ctx, zoomState.level, MAP.BORDER_LEFT, MAP.BORDER_TOP);
+    
+    // Draw scale key
     drawScaleKey(ctx, zoomState.level, bytesPerPixel, minAddr, maxAddr);
 }
 
@@ -509,6 +512,9 @@ function drawBackgroundMobile(ctx) {
     // Black background for the actual map area
     ctx.fillStyle = '#000000';
     ctx.fillRect(MAP.BORDER_LEFT, MAP.BORDER_TOP, MAP.WIDTH, MAP.HEIGHT);
+    
+    // Draw grid lines on background canvas with margin offsets
+    drawGridLines(ctx, zoomState.level, MAP.BORDER_LEFT, MAP.BORDER_TOP);
     
     // No scale key drawn on mobile - it goes in the HTML div below
 }
@@ -616,47 +622,43 @@ function drawMemoryData(ctx) {
     drawGridLines(ctx, zoomState.level);
 }
 
-function drawGridLines(ctx, zoomLevel) {
+function drawGridLines(ctx, zoomLevel, offsetX = 0, offsetY = 0) {
     const tbSize = 128; // 128x128 pixel squares
+    const subSize = 16; // 16x16 pixel sub-squares (128/8 = 16)
     
     // Helper function to draw a single line segment with appropriate style
-    function drawLineSegment(startX, startY, endX, endY, connected) {
-        // Set up style based on connectivity
-        if (connected) {
-            ctx.lineWidth = 1;
-            ctx.setLineDash([2, 4]); // Dotted pattern - squares ARE adjacent
+    function drawLineSegment(startX, startY, endX, endY, isSubGrid) {
+        // Set up style based on connectivity and grid level
+        if (isSubGrid) {
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; // Lighter color for sub-grid
         } else {
-            ctx.lineWidth = 3;
-            ctx.setLineDash([]); // Solid line - squares are NOT adjacent
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
         }
         
-        // Draw the segment (no border adjustment needed for memory canvas)
+        // Draw the segment with optional offset
         ctx.beginPath();
-        ctx.moveTo(startX, startY);
-        ctx.lineTo(endX, endY);
+        ctx.moveTo(startX + offsetX, startY + offsetY);
+        ctx.lineTo(endX + offsetX, endY + offsetY);
         ctx.stroke();
     }
     
     // Helper function to check if two adjacent squares are adjacent in memory
-    function areSquaresAdjacentInMemory(x1, y1, x2, y2) {
-        // Get center points of both squares
-        const centerX1 = x1 + tbSize / 2;
-        const centerY1 = y1 + tbSize / 2;
-        const centerX2 = x2 + tbSize / 2;
-        const centerY2 = y2 + tbSize / 2;
+    function areSquaresAdjacentInMemory(x1, y1, x2, y2, squareSize) {
         
-        // Find addresses at center of each square
-        const addr1 = findAddressAtPixel(centerX1, centerY1);
-        const addr2 = findAddressAtPixel(centerX2, centerY2);
+        // Find addresses in each square.
+        const addr1 = findAddressAtPixel(x1, y1);
+        const addr2 = findAddressAtPixel(x2, y2);
         
         if (addr1 === null || addr2 === null) {
             return true; // Default to light if we can't determine
         }
         
-        // Calculate the memory size of one 128x128 square
+        // Calculate the memory size of one square of the given size
         const { minAddr, maxAddr } = zoomState;
         const bytesPerPixel = (maxAddr - minAddr) / (MAP.WIDTH * MAP.HEIGHT);
-        const bytesPerSquare = bytesPerPixel * tbSize * tbSize;
+        const bytesPerSquare = bytesPerPixel * squareSize * squareSize;
         
         // Round addresses down to square boundaries
         const roundedAddr1 = Math.floor(addr1 / bytesPerSquare) * bytesPerSquare;
@@ -665,43 +667,47 @@ function drawGridLines(ctx, zoomLevel) {
         // Check if the rounded addresses are exactly one square apart
         const addressDiff = Math.abs(roundedAddr1 - roundedAddr2);
         const isAdjacent = addressDiff === bytesPerSquare;
-        
-        
+
         return isAdjacent;
     }
     
-    // Set up basic line style
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-    
-    // Draw vertical lines
-    for (let i = 0; i <= MAP.WIDTH; i += tbSize) {
-        // Check each segment of the vertical line
-        for (let j = 0; j < MAP.HEIGHT; j += tbSize) {
-            const leftSquareX = i - tbSize;
+    // Draw vertical sub-grid lines
+    for (let i = 0; i <= MAP.WIDTH; i += subSize) {
+        // Check each segment of the vertical sub-grid line
+        for (let j = 0; j < MAP.HEIGHT; j += subSize) {
+            let isSubGrid = i % tbSize !== 0;
+            const leftSquareX = i - subSize;
             const rightSquareX = i;
             const squareY = j;
             
-            // Check if squares on left and right of this line are adjacent in memory
-            const isAdjacent = areSquaresAdjacentInMemory(leftSquareX, squareY, rightSquareX, squareY);
+            const isAdjacent   = areSquaresAdjacentInMemory(leftSquareX, squareY, rightSquareX, squareY, subSize);
+            if (!isSubGrid) {
+                const isAdjacentHi = areSquaresAdjacentInMemory(leftSquareX, squareY, rightSquareX, squareY, tbSize);
+                if (isAdjacentHi) isSubGrid = true;
+            }
             
-            // Draw this segment using the helper function
-            drawLineSegment(i, j, i, j + tbSize, isAdjacent);
+            if (!isAdjacent) drawLineSegment(i, j, i, j + subSize, isSubGrid);
         }
     }
     
-    // Draw horizontal lines
-    for (let i = 0; i <= MAP.HEIGHT; i += tbSize) {
-        // Check each segment of the horizontal line
-        for (let j = 0; j < MAP.WIDTH; j += tbSize) {
+    // Draw horizontal sub-grid lines
+    for (let i = 0; i <= MAP.HEIGHT; i += subSize) {
+        // Check each segment of the horizontal sub-grid line
+        for (let j = 0; j < MAP.WIDTH; j += subSize) {
+            let isSubGrid = i % tbSize !== 0;
             const squareX = j;
-            const topSquareY = i - tbSize;
+            const topSquareY = i - subSize;
             const bottomSquareY = i;
             
-            // Check if squares above and below this line are adjacent in memory
-            const isAdjacent = areSquaresAdjacentInMemory(squareX, topSquareY, squareX, bottomSquareY);
+            // Check if sub-squares above and below this line are adjacent in memory
+            const isAdjacent   = areSquaresAdjacentInMemory(squareX, topSquareY, squareX, bottomSquareY, subSize);
+            if (!isSubGrid) {
+                const isAdjacentHi = areSquaresAdjacentInMemory(squareX, topSquareY, squareX, bottomSquareY, tbSize);
+                if (isAdjacentHi) isSubGrid = true;
+            }
             
-            // Draw this segment using the helper function
-            drawLineSegment(j, i, j + tbSize, i, isAdjacent);
+            // Draw this segment using the helper function (isSubGrid = true)
+            if (!isAdjacent) drawLineSegment(j, i, j + subSize, i, isSubGrid);
         }
     }
     
@@ -776,32 +782,114 @@ function hideTooltip() {
     removeShading();
 }
 
+function isTooltipVisible() {
+    const tooltip = document.getElementById('tooltip');
+    return tooltip && tooltip.style.display === 'block';
+}
+
 function showTooltipForCoords(coords, clientX, clientY) {
     const address = findAddressAtPixel(coords.mapX, coords.mapY);
     const region = findRegionFromAddress(address);
     const tooltip = document.getElementById('tooltip');
     
     if (region) {
-        const size = region.end - region.start;
-        const sizeHex = '0x' + size.toString(16);
-        const sizeApprox = formatBytes(size);
-        
-        const startAlignment = getAlignment(region.start);
-        const endAlignment = getAlignment(region.end);
-        const startAlignmentStr = formatBytes(startAlignment);
-        const endAlignmentStr = formatBytes(endAlignment);
-        
-        tooltip.innerHTML = `<span class="tooltip-close" onclick="hideTooltip()">&times;</span>${region.name}<br>0x${region.start.toString(16)} - 0x${region.end.toString(16)}<br>Size: ${sizeHex} (ca. ${sizeApprox})<br>Start alignment: ${startAlignmentStr}<br>End alignment: ${endAlignmentStr}`;
-        tooltip.style.display = 'block';
-        tooltip.style.left = clientX + 'px';
-        tooltip.style.top = (clientY - 100) + 'px';
-        
-        // Remove any existing shading and apply new shading
-        removeShading();
-        applyShading(region);
+        showTooltipForRegion(region, clientX, clientY);
     } else {
         hideTooltip();
     }
+}
+
+function showTooltipForRegion(region, clientX, clientY) {
+    const tooltip = document.getElementById('tooltip');
+    
+    const size = region.end - region.start;
+    const sizeHex = '0x' + size.toString(16);
+    const sizeApprox = formatBytes(size);
+    
+    const startAlignment = getAlignment(region.start);
+    const endAlignment = getAlignment(region.end);
+    const startAlignmentStr = formatBytes(startAlignment);
+    const endAlignmentStr = formatBytes(endAlignment);
+    
+    // Find current region index
+    const currentIndex = regions.indexOf(region);
+    
+    tooltip.innerHTML = `
+        <span class="tooltip-close" onclick="hideTooltip()">&times;</span>
+        <div style="display: flex; align-items: center; margin-bottom: 5px;">
+            <button class="tooltip-nav" onclick="showPreviousRegion()" style="margin-right: 10px;">&#9664;</button>
+            <div class="tooltip-region-name" style="flex: 1; text-align: center; font-weight: bold;">${region.name}</div>
+            <button class="tooltip-nav" onclick="showNextRegion()" style="margin-left: 10px;">&#9654;</button>
+        </div>
+        <div class="tooltip-content">
+            <div class="tooltip-address">0x${region.start.toString(16)} - 0x${region.end.toString(16)}</div>
+            <div class="tooltip-size">Size: ${sizeHex} (ca. ${sizeApprox})</div>
+            <div class="tooltip-alignment-start">Start alignment: ${startAlignmentStr}</div>
+            <div class="tooltip-alignment-end">End alignment: ${endAlignmentStr}</div>
+        </div>
+    `;
+    
+    tooltip.style.display = 'block';
+    tooltip.style.left = clientX + 'px';
+    tooltip.style.top = (clientY - 100) + 'px';
+    
+    // Store current region and position for navigation
+    tooltip.dataset.currentRegion = currentIndex;
+    tooltip.dataset.clientX = clientX;
+    tooltip.dataset.clientY = clientY;
+    
+    // Remove any existing shading and apply new shading
+    removeShading();
+    applyShading(region);
+}
+
+function showPreviousRegion() {
+    const tooltip = document.getElementById('tooltip');
+    const currentIndex = parseInt(tooltip.dataset.currentRegion);
+    const prevIndex = currentIndex > 0 ? currentIndex - 1 : regions.length - 1;
+    
+    updateTooltipContent(regions[prevIndex], prevIndex);
+}
+
+function showNextRegion() {
+    const tooltip = document.getElementById('tooltip');
+    const currentIndex = parseInt(tooltip.dataset.currentRegion);
+    const nextIndex = currentIndex < regions.length - 1 ? currentIndex + 1 : 0;
+    
+    updateTooltipContent(regions[nextIndex], nextIndex);
+}
+
+function updateTooltipContent(region, regionIndex) {
+    const tooltip = document.getElementById('tooltip');
+    
+    const size = region.end - region.start;
+    const sizeHex = '0x' + size.toString(16);
+    const sizeApprox = formatBytes(size);
+    
+    const startAlignment = getAlignment(region.start);
+    const endAlignment = getAlignment(region.end);
+    const startAlignmentStr = formatBytes(startAlignment);
+    const endAlignmentStr = formatBytes(endAlignment);
+    
+    // Update only the content elements, not the buttons
+    const regionNameEl = tooltip.querySelector('.tooltip-region-name');
+    const addressEl = tooltip.querySelector('.tooltip-address');
+    const sizeEl = tooltip.querySelector('.tooltip-size');
+    const startAlignmentEl = tooltip.querySelector('.tooltip-alignment-start');
+    const endAlignmentEl = tooltip.querySelector('.tooltip-alignment-end');
+    
+    if (regionNameEl) regionNameEl.textContent = region.name;
+    if (addressEl) addressEl.textContent = `0x${region.start.toString(16)} - 0x${region.end.toString(16)}`;
+    if (sizeEl) sizeEl.textContent = `Size: ${sizeHex} (ca. ${sizeApprox})`;
+    if (startAlignmentEl) startAlignmentEl.textContent = `Start alignment: ${startAlignmentStr}`;
+    if (endAlignmentEl) endAlignmentEl.textContent = `End alignment: ${endAlignmentStr}`;
+    
+    // Update stored region index
+    tooltip.dataset.currentRegion = regionIndex;
+    
+    // Update shading to highlight the new region
+    removeShading();
+    applyShading(region);
 }
 
 function maybePerformZoom(coords) {
@@ -1080,9 +1168,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     document.addEventListener('click', function(e) {
         const memoryCanvas = document.getElementById('memoryCanvas');
         const backgroundCanvas = document.getElementById('backgroundCanvas');
+        const tooltip = document.getElementById('tooltip');
         
-        // If click is outside both canvases entirely
-        if (e.target !== memoryCanvas && e.target !== backgroundCanvas) {
+        // If click is not on the memory canvas and not on the tooltip itself
+        if (e.target !== memoryCanvas && !tooltip.contains(e.target)) {
             hideTooltip();
         }
     });
@@ -1132,10 +1221,16 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     }, { passive: false });
     
-    // Keyboard shortcut for zoom reset.
+    // Keyboard shortcuts for zoom reset and tooltip navigation.
     document.addEventListener('keydown', function(e) {
         if (e.key === 'r' || e.key === 'R') {
             resetZoom();
+        } else if (e.key === 'ArrowLeft' && isTooltipVisible()) {
+            e.preventDefault(); // Prevent page scrolling
+            showPreviousRegion();
+        } else if (e.key === 'ArrowRight' && isTooltipVisible()) {
+            e.preventDefault(); // Prevent page scrolling
+            showNextRegion();
         }
     });
     
