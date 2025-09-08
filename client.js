@@ -1068,8 +1068,6 @@ function maybePerformZoom(coords) {
         newOffsetY
     );
     
-    hideTooltip();
-    
     // Trigger animated zoom
     animateZoomIn(gridX, gridY, newZoomState);
 }
@@ -1105,7 +1103,6 @@ function zoomOut() {
     const oldZoomState = zoomState;
     zoomState = new ZoomState(newLevel, newMinAddr, newMaxAddr, x24, y24);
 
-    hideTooltip();
     animateZoomOut(oldZoomState, zoomState);
 }
 
