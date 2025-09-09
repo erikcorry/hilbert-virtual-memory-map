@@ -320,7 +320,7 @@ function applyShading(region, canvas, highlighted) {
         if (coords.x >= 0 && coords.x < MAP.WIDTH && coords.y >= 0 && coords.y < MAP.HEIGHT) {
             // Check if this pixel should be highlighted based on shading pattern
             const shadingValue = (coords.x + coords.y) % 8;
-            if (shadingValue >= 2 && shadingValue <= 2) {
+            if (shadingValue >= 2 && shadingValue <= 3) {
                 const dataIndex = (coords.y * MAP.WIDTH + coords.x) * 4;
                 data[dataIndex] = 255;     // Red = white
                 data[dataIndex + 1] = 255; // Green = white  
@@ -1188,7 +1188,6 @@ function animateZoomIn(oldZoomState, newZoomState, skipURLUpdate = false) {
     
     // Calculate grid position from the new zoom state's minAddr in the old zoom state
     const gridCoords = addressToCanvasCoordinates(newZoomState.minAddr, oldZoomState);
-    console.log("gridCoords = " + gridCoords);
     const gridSize = 128;
     const gridX = Math.floor(gridCoords.x / gridSize) * gridSize;
     const gridY = Math.floor(gridCoords.y / gridSize) * gridSize;
@@ -1197,8 +1196,6 @@ function animateZoomIn(oldZoomState, newZoomState, skipURLUpdate = false) {
     const memoryCanvasRect = memoryCanvas.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
 
-    console.log(`containerRect = ${containerRect}`);
-    
     // Position and size the animating canvas to exactly match the memory canvas
     animatingCanvas.style.left = (memoryCanvasRect.left - containerRect.left - 1) + 'px';
     animatingCanvas.style.top = (memoryCanvasRect.top - containerRect.top - 1) + 'px';
@@ -1215,8 +1212,6 @@ function animateZoomIn(oldZoomState, newZoomState, skipURLUpdate = false) {
     const actualStartTranslateX = ((gridX / 1024) * actualCanvasWidth);
     const actualStartTranslateY = ((gridY / 1024 ) * actualCanvasHeight);
 
-    console.log(`actualStartTranslateX = ${actualStartTranslateX} actualStartTranslateY = ${actualStartTranslateY}`);
-    
     animatingCanvas.style.transform = `translate(${actualStartTranslateX}px, ${actualStartTranslateY}px) scale(${actualStartScale})`;
     
     // Add to container
