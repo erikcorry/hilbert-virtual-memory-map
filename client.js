@@ -65,6 +65,8 @@ class ZoomState {
         const maxHex = '0x' + this.maxAddr.toString(16);
         return `ZoomState(level=${this.level}, ${minHex}-${maxHex}, offset=${this.offsetX},${this.offsetY})`;
     }
+
+    addressSize() { return this.maxAddr - this.minAddr; }
 }
 
 class Highlighted {
@@ -318,7 +320,7 @@ function applyShading(region, canvas, highlighted) {
         if (coords.x >= 0 && coords.x < MAP.WIDTH && coords.y >= 0 && coords.y < MAP.HEIGHT) {
             // Check if this pixel should be highlighted based on shading pattern
             const shadingValue = (coords.x + coords.y) % 8;
-            if (shadingValue >= 2 && shadingValue <= 4) {
+            if (shadingValue >= 2 && shadingValue <= 2) {
                 const dataIndex = (coords.y * MAP.WIDTH + coords.x) * 4;
                 data[dataIndex] = 255;     // Red = white
                 data[dataIndex + 1] = 255; // Green = white  
@@ -1041,7 +1043,7 @@ function maybePerformZoom(coords) {
     // Find what address was clicked.
     const clickedAddress = findAddressAtPixel(coords.mapX, coords.mapY);
     // Round to nearest 64th boundaries.
-    const currentRange = zoomState.maxAddr - zoomState.minAddr;
+    const currentRange = zoomState.addressSize();
     const gridAddressSize = currentRange / 64; // 8x8 = 64 squares.
     const gridIndex = Math.floor((clickedAddress - zoomState.minAddr) / gridAddressSize);
     const gridStartAddr = zoomState.minAddr + gridIndex * gridAddressSize;
@@ -1069,7 +1071,7 @@ function maybePerformZoom(coords) {
     );
     
     // Trigger animated zoom
-    animateZoomIn(gridX, gridY, newZoomState);
+    animateZoomIn(zoomState, newZoomState);
 }
 
 function zoomOut() {
@@ -1162,7 +1164,7 @@ function parseURLState() {
     return false; // No valid state in URL
 }
 
-function animateZoomIn(gridX, gridY, newZoomState, skipURLUpdate = false) {
+function animateZoomIn(oldZoomState, newZoomState, skipURLUpdate = false) {
     if (animationState.isAnimating) {
         return; // Already animating
     }
@@ -1178,31 +1180,28 @@ function animateZoomIn(gridX, gridY, newZoomState, skipURLUpdate = false) {
     // Create animating canvas and render new zoomed content directly to it
     const animatingCanvas = createCanvas({
         transition: 'transform 0.8s cubic-bezier(0.23, 1, 0.320, 1)',
-        transformOrigin: 'center center'
+        transformOrigin: 'top left'
     });
     
     // Render new zoomed content directly to the animating canvas
     drawMemoryData(animatingCanvas, newZoomState);
     
-    // Calculate positions
+    // Calculate grid position from the new zoom state's minAddr in the old zoom state
+    const gridCoords = addressToCanvasCoordinates(newZoomState.minAddr, oldZoomState);
+    console.log("gridCoords = " + gridCoords);
     const gridSize = 128;
-    const gridCenterX = gridX + (gridSize / 2);
-    const gridCenterY = gridY + (gridSize / 2);
-    const canvasCenterX = 512;
-    const canvasCenterY = 512;
-    
-    // Position at grid square center with small scale
-    const startScale = gridSize / 1024; // 1/8 scale
-    const startTranslateX = gridCenterX - canvasCenterX;
-    const startTranslateY = gridCenterY - canvasCenterY;
+    const gridX = Math.floor(gridCoords.x / gridSize) * gridSize;
+    const gridY = Math.floor(gridCoords.y / gridSize) * gridSize;
     
     // Get the actual rendered position and size of the memory canvas
     const memoryCanvasRect = memoryCanvas.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
+
+    console.log(`containerRect = ${containerRect}`);
     
-    // Position the animating canvas at the same location as the memory canvas
-    animatingCanvas.style.left = (memoryCanvasRect.left - containerRect.left) + 'px';
-    animatingCanvas.style.top = (memoryCanvasRect.top - containerRect.top) + 'px';
+    // Position and size the animating canvas to exactly match the memory canvas
+    animatingCanvas.style.left = (memoryCanvasRect.left - containerRect.left - 1) + 'px';
+    animatingCanvas.style.top = (memoryCanvasRect.top - containerRect.top - 1) + 'px';
     animatingCanvas.style.width = memoryCanvasRect.width + 'px';
     animatingCanvas.style.height = memoryCanvasRect.height + 'px';
     
@@ -1213,12 +1212,10 @@ function animateZoomIn(gridX, gridY, newZoomState, skipURLUpdate = false) {
     const actualStartScale = actualGridSize / actualCanvasWidth;
     
     // Calculate translation based on actual rendered dimensions
-    const actualGridCenterX = ((gridX / 1024) * actualCanvasWidth) + (actualGridSize / 2);
-    const actualGridCenterY = ((gridY / 1024 ) * actualCanvasHeight) + (actualGridSize / 2);
-    const actualCanvasCenterX = actualCanvasWidth / 2;
-    const actualCanvasCenterY = memoryCanvasRect.height / 2;
-    const actualStartTranslateX = actualGridCenterX - actualCanvasCenterX;
-    const actualStartTranslateY = actualGridCenterY - actualCanvasCenterY;
+    const actualStartTranslateX = ((gridX / 1024) * actualCanvasWidth);
+    const actualStartTranslateY = ((gridY / 1024 ) * actualCanvasHeight);
+
+    console.log(`actualStartTranslateX = ${actualStartTranslateX} actualStartTranslateY = ${actualStartTranslateY}`);
     
     animatingCanvas.style.transform = `translate(${actualStartTranslateX}px, ${actualStartTranslateY}px) scale(${actualStartScale})`;
     
@@ -1373,8 +1370,7 @@ function getZoomStateOfAddress(currentZoomState, newMinAddr) {
     if (newMinAddr < 0) newMinAddr += Math.pow(2, 48);
     if (newMinAddr >= Math.pow(2, 48)) newMinAddr -= Math.pow(2, 48);
     if (newMinAddr == currentZoomState.minAddr) return null;
-    const addressRange = currentZoomState.maxAddr - currentZoomState.minAddr;
-    const newMaxAddr = newMinAddr + addressRange;
+    const newMaxAddr = newMinAddr + currentZoomState.addressSize();
     
     // Calculate new offsets based on where the new min address should appear
     // The new min address should appear at canvas coordinate (0,0)
@@ -1446,7 +1442,7 @@ function animatePan(oldZoomState, newZoomState, skipURLUpdate = false) {
     const deltaY = newZoomState.offsetY - oldZoomState.offsetY;
     
     let slideX = 0, slideY = 0;
-    
+
     // Use the larger delta to determine slide direction
     if (Math.abs(deltaX) > Math.abs(deltaY)) {
         // Horizontal slide
@@ -1674,8 +1670,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         } else if (e.key === 'ArrowDown') {
             e.preventDefault(); // Prevent page scrolling
-            const size = zoomState.maxAddr - zoomState.minAddr;
-            const newZoomState = getZoomStateOfAddress(zoomState, zoomState.minAddr - size);
+            const newZoomState = getZoomStateOfAddress(zoomState, zoomState.minAddr - zoomState.addressSize());
             if (newZoomState) {
                 animatePan(zoomState, newZoomState);
             }
@@ -1697,9 +1692,12 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     // Browser back/forward button support
     window.addEventListener('popstate', function(event) {
-        // Don't handle popstate during animations
+        // Cancel any current animation
         if (animationState.isAnimating) {
-            return;
+            if (animationState.animationId) {
+                cancelAnimationFrame(animationState.animationId);
+            }
+            finishCurrentAnimation();
         }
         
         // Store current state to compare
@@ -1723,12 +1721,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                               (zoomState.minAddr !== oldState.minAddr || zoomState.maxAddr !== oldState.maxAddr);
             
             if (isZoomingIn) {
-                // For zoom in, we need to calculate which grid square to animate from
-                // This is an approximation - we'll use the center of the new view
-                zoomInCoords = addressToCanvasCoordinates(zoomState.minAddr, oldState);
-                const gridX = Math.floor(zoomInCoords.x / 128) * 128;
-                const gridY = Math.floor(zoomInCoords.y / 128) * 128;
-                animateZoomIn(gridX, gridY, zoomState, true);
+                // For zoom in, animate from the appropriate grid position
+                animateZoomIn(oldState, zoomState, true);
             } else if (isZoomingOut) {
                 // For zoom out, animate the old view shrinking
                 animateZoomOut(oldState, zoomState, true);
