@@ -582,7 +582,7 @@ function drawBackground(ctx) {
     const bytesPerPixel = addressRange / (MAP.WIDTH * MAP.HEIGHT);
 
     // Light gray background for entire canvas
-    ctx.fillStyle = '#C0C0C0';
+    ctx.fillStyle = '#F0B060';
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
     // Create transparent hole for the map area using composite operation
