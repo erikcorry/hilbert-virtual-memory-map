@@ -1,0 +1,14 @@
+network,geoname_id,continent_code,continent_name,country_iso_code,country_name,is_anonymous_proxy,is_satellite_provider
+1.0.0.0/24,2077456,OC,Oceania,AU,Australia,0,0
+1.0.1.0/24,1814991,AS,Asia,CN,China,0,0
+1.0.2.0/23,1814991,AS,Asia,CN,China,0,0
+1.0.4.0/22,2077456,OC,Oceania,AU,Australia,0,0
+1.0.8.0/21,1814991,AS,Asia,CN,China,0,0
+1.0.16.0/20,1861060,AS,Asia,JP,Japan,0,0
+1.0.32.0/19,1814991,AS,Asia,CN,China,0,0
+1.0.64.0/18,1861060,AS,Asia,JP,Japan,0,0
+1.0.128.0/19,1605651,AS,Asia,TH,Thailand,0,0
+1.0.160.0/22,1605651,AS,Asia,TH,Thailand,0,0
+1.0.164.0/28,1605651,AS,Asia,TH,Thailand,0,0
+1.0.164.16/30,1605651,AS,Asia,TH,Thailand,0,0
+1.0.164.20/31,1605651,AS,Asia,TH,Thailand,0,0

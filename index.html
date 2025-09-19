@@ -15,6 +15,9 @@
             <div class="text-editor">
                 <div class="editor-toolbar">
                     <button onclick="loadSampleFile()">Load Sample</button>
+                    <input type="file" id="fileInput" style="display: none;" onchange="handleFileUpload(event)">
+                    <button onclick="document.getElementById('fileInput').click()">Upload File</button>
+                    <button id="toggleFullContent" onclick="toggleFullContent()" style="display: none;">Show Full Content</button>
                     <button onclick="applyChanges()">Apply Changes</button>
                     <button onclick="resetToOriginal()">Reset</button>
                     <span id="status"></span>

@@ -1,4 +1,166 @@
 let regions = [];
+let currentFormat; // Will be initialized after class definitions
+
+// Format strategy classes
+class DefaultFormat {
+    getTitle() {
+        return "Memory Map Visualization";
+    }
+
+    getSubtitle() {
+        return "48-bit virtual address space (256 TiB) mapped to 1024x1024 using Hilbert curve";
+    }
+
+    getMaxZoomLevel() {
+        return 4; // Default for 48-bit address space
+    }
+
+    getSizeKeyLabels() {
+        return [
+            { bytes: 4 * 1024, name: '4 KiB' },
+            { bytes: 64 * 1024, name: '64 KiB' },
+            { bytes: 1024 * 1024, name: '1 MiB' },
+            { bytes: 64 * 1024 * 1024, name: '64 MiB' },
+            { bytes: 1024 * 1024 * 1024, name: '1 GiB' },
+            { bytes: 64 * 1024 * 1024 * 1024, name: '64 GiB' },
+            { bytes: 1024 * 1024 * 1024 * 1024, name: '1 TiB' },
+            { bytes: 64 * 1024 * 1024 * 1024 * 1024, name: '64 TiB' }
+        ];
+    }
+
+    formatPixelLabel(bytesPerPixel) {
+        return `Each pixel = ${formatBytes(bytesPerPixel)}`;
+    }
+
+    formatSquareLabel(bytesPerSquare) {
+        return `Each square = ${formatBytes(bytesPerSquare)}`;
+    }
+
+    formatZoomedViewLabel(currentRange) {
+        return `Zoomed view = ${formatBytes(currentRange)}`;
+    }
+
+    formatZoomedViewLabelMobile(currentRange) {
+        return `View = ${formatBytes(currentRange)}`;
+    }
+
+    formatRangeLabel(minAddr, maxAddr) {
+        return `0x${minAddr.toString(16)} - 0x${maxAddr.toString(16)}`;
+    }
+
+    formatTooltip(region) {
+        const size = region.end - region.start;
+        const sizeHex = '0x' + size.toString(16);
+        const sizeApprox = formatBytes(size);
+        const startAlignment = getAlignment(region.start);
+        const endAlignment = getAlignment(region.end);
+        const startAlignmentStr = formatBytes(startAlignment);
+        const endAlignmentStr = formatBytes(endAlignment);
+
+        return `
+            <div class="tooltip-address">0x${region.start.toString(16)} - 0x${region.end.toString(16)}</div>
+            <div class="tooltip-size">Size: ${sizeHex} (ca. ${sizeApprox})</div>
+            <div class="tooltip-alignment-start">Start alignment: ${startAlignmentStr}</div>
+            <div class="tooltip-alignment-end">End alignment: ${endAlignmentStr}</div>
+        `;
+    }
+}
+
+class ProcMapsFormat extends DefaultFormat {
+    // Inherits default behavior for now
+}
+
+class IPv4GeolocationFormat {
+    getTitle() {
+        return "IPv4 Geodata Visualization";
+    }
+
+    getSubtitle() {
+        return "32-bit IPv4 address space (4 billion IPs) mapped to 1024x1024 using Hilbert curve";
+    }
+
+    getMaxZoomLevel() {
+        return 3; // Reduced for 32-bit IPv4 address space
+    }
+
+    getSizeKeyLabels() {
+        // IPv4 address ranges - bytes divided by 65536 to get address count
+        return [
+            { bytes: 1 * 65536, name: '1 address' },           // /28 network
+            { bytes: 16 * 65536, name: '16 addresses' },           // /28 network
+            { bytes: 256 * 65536, name: '256 addresses' },           // /24 network
+            { bytes: 1024 * 65536, name: '1024 addresses' },         // /22 network
+            { bytes: 4096 * 65536, name: '4096 addresses' },         // /20 network
+            { bytes: 16384 * 65536, name: '16384 addresses' },       // /18 network
+            { bytes: 65536 * 65536, name: '65536 addresses' },       // /16 network
+            { bytes: 262144 * 65536, name: '262144 addresses' },     // /14 network
+            { bytes: 1048576 * 65536, name: '1048576 addresses' },   // /12 network
+            { bytes: 16777216 * 65536, name: '16777216 addresses' }  // /8 network
+        ];
+    }
+
+    formatPixelLabel(bytesPerPixel) {
+        const addressesPerPixel = Math.floor(bytesPerPixel / 65536);
+        return `Each pixel = ${addressesPerPixel} addresses`;
+    }
+
+    formatSquareLabel(bytesPerSquare) {
+        const addressesPerSquare = Math.floor(bytesPerSquare / 65536);
+        return `Each square = ${addressesPerSquare} addresses`;
+    }
+
+    formatZoomedViewLabel(currentRange) {
+        const addressRange = Math.floor(currentRange / 65536);
+        return `Zoomed view = ${addressRange} addresses`;
+    }
+
+    formatZoomedViewLabelMobile(currentRange) {
+        const addressRange = Math.floor(currentRange / 65536);
+        return `View = ${addressRange} addresses`;
+    }
+
+    formatRangeLabel(minAddr, maxAddr) {
+        const startIP = this.addressToIPv4(minAddr);
+        const cidrBits = this.calculateCIDRBits(minAddr, maxAddr);
+        return `${startIP}/${cidrBits}`;
+    }
+
+    formatTooltip(region) {
+        const startIP = this.addressToIPv4(region.start);
+        const cidrBits = this.calculateCIDRBits(region.start, region.end);
+        const size = region.end - region.start;
+        const sizeDecimal = Math.floor(size / 65536); // Convert back to number of IP addresses
+
+        return `
+            <div class="tooltip-address">${startIP}/${cidrBits}</div>
+            <div class="tooltip-size">Size: ${sizeDecimal}</div>
+        `;
+    }
+
+    addressToIPv4(addr48bit) {
+        const ipInt = Math.floor(addr48bit / 65536);
+        return [
+            (ipInt >>> 24) & 0xFF,
+            (ipInt >>> 16) & 0xFF,
+            (ipInt >>> 8) & 0xFF,
+            ipInt & 0xFF
+        ].join('.');
+    }
+
+    calculateCIDRBits(startAddr48bit, endAddr48bit) {
+        const startIP = Math.floor(startAddr48bit / 65536);
+        const endIP = Math.floor(endAddr48bit / 65536);
+        const range = endIP - startIP;
+
+        // Find the number of host bits needed to represent this range
+        const hostBits = Math.ceil(Math.log2(range));
+        return 32 - hostBits;
+    }
+}
+
+// Initialize with default format after class definitions
+currentFormat = new DefaultFormat();
+
 let originalTextContent = '';
 let colorMap = new Map();
 let colorIndex = 0;
@@ -18,7 +180,6 @@ const MAP = {
     BORDER_RIGHT_DESKTOP: 450,    // Right border/margin on desktop
     BORDER_RIGHT_MOBILE: 100,     // Right border/margin on mobile
     KEY_OFFSET: 50,               // Offset for legend from map edge
-    MAX_ZOOM: 4                   // Max zoom level.
 };
 
 class ZoomState {
@@ -175,6 +336,36 @@ function generateColorForName(name) {
         return colorMap.get(name);
     }
 
+    // Check if this is an auto-generated region (prefixed with "Auto:")
+    if (name.startsWith('Auto:')) {
+        // Use distinct grey shades for auto regions
+        const hash = Array.from(name).reduce((hash, char) => {
+            return hash + char.charCodeAt(0);
+        }, 0);
+
+        // Create clearly visible grey shades - much darker range
+        const greyValues = [64, 96, 128, 160, 192, 224]; // Dark to light grey values
+        const greyIndex = hash % greyValues.length;
+        const greyValue = greyValues[greyIndex];
+
+        // Give each auto region a different hue but keep it very desaturated
+        const hue = (hash * 137.5) % 360; // Golden angle spacing for hue variety
+
+        const color = {
+            r: greyValue,
+            g: greyValue,
+            b: greyValue,
+            a: 255,
+            hue: hue,
+            saturation: 15, // Low saturation for grey appearance
+            lightness: Math.round(greyValue * 100 / 255)
+        };
+
+
+        colorMap.set(name, color);
+        return color;
+    }
+
     // Extract base name and permissions
     let baseName = name;
     let permissions = '';
@@ -206,7 +397,7 @@ function generateColorForName(name) {
         // Default saturation for regions without permission suffix (original format)
         saturation = 70;
     }
-    
+
     const lightness = 50 + (colorIndex % 2) * 10;  // 50-60% lightness
 
     // Convert HSL to RGB
@@ -350,12 +541,36 @@ function removeShading(canvas, highlighted) {
 function parseMemoryData(textContent) {
     const lines = textContent.split('\n').filter(line => line.trim());
     const tempMemoryRanges = [];
-    
-    // Detect format: check if first line looks like /proc/self/maps
+
+    // Detect format
     const isProcMapsFormat = lines.length > 0 && lines[0].includes('-') && lines[0].includes(' ');
+    const isIPv4GeolocationFormat = lines.length > 0 && (
+        lines[0].includes('network,') ||
+        (lines.length > 1 && lines[1].includes('/') && lines[1].includes(','))
+    );
+
+    // Set current format
+    if (isIPv4GeolocationFormat) {
+        currentFormat = new IPv4GeolocationFormat();
+    } else if (isProcMapsFormat) {
+        currentFormat = new ProcMapsFormat();
+    } else {
+        currentFormat = new DefaultFormat();
+    }
     
     for (const line of lines) {
-        if (isProcMapsFormat) {
+        if (isIPv4GeolocationFormat) {
+            // Skip CSV header line
+            if (line.startsWith('network,') || line.includes('geoname_id')) {
+                continue;
+            }
+
+            // Parse IPv4 geolocation CSV format using helper function
+            const region = parseIPv4CIDRLine(line);
+            if (region) {
+                tempMemoryRanges.push(region);
+            }
+        } else if (isProcMapsFormat) {
             // Skip vsyscall lines
             if (line.includes('[vsyscall]')) {
                 continue;
@@ -411,16 +626,172 @@ function parseMemoryData(textContent) {
         }
     }
     
+    // Add auto regions for IPv4 mode
+    if (isIPv4GeolocationFormat) {
+        const autoRegions = getIPv4AutoRegions();
+        for (const autoLine of autoRegions) {
+            const region = parseIPv4CIDRLine(autoLine);
+            if (region) {
+                tempMemoryRanges.push(region);
+            }
+        }
+    }
+
     return tempMemoryRanges.sort((a, b) => a.start - b.start);
 }
 
+function parseIPv4CIDRLine(line) {
+    const parts = line.split(',');
+    if (parts.length >= 6) {
+        const cidr = parts[0];
+        const countryName = parts[5];
+
+        // Parse CIDR notation
+        const [ipStr, prefixLenStr] = cidr.split('/');
+        const prefixLen = parseInt(prefixLenStr);
+
+        if (!isNaN(prefixLen) && prefixLen <= 32) {
+            const ipParts = ipStr.split('.').map(x => parseInt(x));
+            if (ipParts.length === 4 && ipParts.every(x => x >= 0 && x <= 255)) {
+                const ipInt = ((ipParts[0] << 24) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3]) >>> 0;
+
+                const hostBits = 32 - prefixLen;
+                const networkMask = (0xFFFFFFFF << hostBits) >>> 0;
+                const networkStart = (ipInt & networkMask) >>> 0;
+                const networkEnd = (networkStart | ((1 << hostBits) - 1)) >>> 0;
+
+                const startAddr = networkStart * 65536;
+                const endAddr = (networkEnd + 1) * 65536;
+
+                const maxAddress = Math.pow(2, 48);
+                if (startAddr < maxAddress) {
+                    const clampedEnd = Math.min(endAddr, maxAddress);
+                    const color = generateColorForName(countryName);
+                    return new Region(startAddr, clampedEnd, countryName, color);
+                }
+            }
+        }
+    }
+    return null;
+}
+
+function getIPv4AutoRegions() {
+    return [
+        '127.0.0.0/8,0,,,,Auto: Localhost/Loopback,0,0',
+        '10.0.0.0/8,0,,,,Auto: Private Use Class A,0,0',
+        '172.16.0.0/12,0,,,,Auto: Private Use Class B,0,0',
+        '192.168.0.0/16,0,,,,Auto: Private Use Class C,0,0',
+        '224.0.0.0/4,0,,,,Auto: Multicast,0,0',
+        '240.0.0.0/4,0,,,,Auto: Reserved for Future Use,0,0',
+        '0.0.0.0/8,0,,,,Auto: This Network,0,0',
+        '169.254.0.0/16,0,,,,Auto: Link-Local,0,0',
+        '192.0.0.0/24,0,,,,Auto: IETF Protocol Assignments,0,0',
+        '192.0.2.0/24,0,,,,Auto: Documentation (TEST-NET-1),0,0',
+        '198.51.100.0/24,0,,,,Auto: Documentation (TEST-NET-2),0,0',
+        '203.0.113.0/24,0,,,,Auto: Documentation (TEST-NET-3),0,0',
+        '198.18.0.0/15,0,,,,Auto: Benchmark Testing,0,0',
+        '100.64.0.0/10,0,,,,Auto: Carrier-grade NAT,0,0'
+    ];
+}
+
+function updatePageTitles() {
+    const titleElement = document.querySelector('.map-view h1');
+    const subtitleElement = document.querySelector('.map-view p');
+
+    if (titleElement) {
+        titleElement.textContent = currentFormat.getTitle();
+    }
+    if (subtitleElement) {
+        subtitleElement.textContent = currentFormat.getSubtitle();
+    }
+}
+
+let fullFileContent = '';
+let isContentTruncated = false;
+
+function handleFileUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const content = e.target.result;
+        const lineCount = (content.match(/\n/g) || []).length + 1;
+        const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+
+        // Store full content for processing
+        fullFileContent = content;
+        isContentTruncated = false;
+
+        // If file is large, truncate display but keep full content for parsing
+        if (lineCount > 10000) {
+            const lines = content.split('\n');
+            const truncatedContent = lines.slice(0, 1000).join('\n') +
+                `\n\n... [${lineCount - 1000} more lines truncated for display performance]\n` +
+                `[Full content will be used when applying changes]`;
+
+            document.getElementById('textEditor').value = truncatedContent;
+            isContentTruncated = true;
+            document.getElementById('toggleFullContent').style.display = 'inline-block';
+            setStatus(`Loaded file: ${file.name} (${fileSizeMB} MB, ${lineCount} lines) - Display truncated for performance`);
+        } else {
+            document.getElementById('textEditor').value = content;
+            document.getElementById('toggleFullContent').style.display = 'none';
+            setStatus(`Loaded file: ${file.name} (${fileSizeMB} MB, ${lineCount} lines)`);
+        }
+
+        // Auto-apply changes after loading file
+        setTimeout(() => {
+            applyChanges();
+        }, 100); // Small delay to ensure UI updates complete
+    };
+    reader.onerror = function() {
+        setStatus('Error reading file', true);
+    };
+    reader.readAsText(file);
+}
+
+function toggleFullContent() {
+    const button = document.getElementById('toggleFullContent');
+    const textEditor = document.getElementById('textEditor');
+
+    if (isContentTruncated && button.textContent === 'Show Full Content') {
+        // Warning before showing full content
+        if (confirm('Warning: Showing the full content may cause browser slowdown. Continue?')) {
+            textEditor.value = fullFileContent;
+            button.textContent = 'Show Truncated';
+            setStatus('Showing full content - browser may be slower');
+        }
+    } else {
+        // Go back to truncated view
+        const lines = fullFileContent.split('\n');
+        const lineCount = lines.length;
+        const truncatedContent = lines.slice(0, 1000).join('\n') +
+            `\n\n... [${lineCount - 1000} more lines truncated for display performance]\n` +
+            `[Full content will be used when applying changes]`;
+
+        textEditor.value = truncatedContent;
+        button.textContent = 'Show Full Content';
+        setStatus('Switched back to truncated view for better performance');
+    }
+}
+
 async function applyChanges() {
-    const textContent = document.getElementById('textEditor').value;
+    // Use full content if available (for large files), otherwise use textarea content
+    const textContent = isContentTruncated ? fullFileContent : document.getElementById('textEditor').value;
+
     try {
         // Parse the text content using the unified parser
         regions = parseMemoryData(textContent);
+        updatePageTitles();
         updateCanvas(zoomState);
-        setStatus('Changes applied to visualization');
+
+        const lineCount = (textContent.match(/\n/g) || []).length + 1;
+        if (isContentTruncated) {
+            setStatus(`Changes applied - processed ${lineCount} lines from full file content`);
+        } else {
+            setStatus('Changes applied to visualization');
+        }
 
         // Auto-switch to map tab to show results
         switchTab('map');
@@ -434,8 +805,9 @@ async function applyChanges() {
 async function loadMemoryMap() {
     const response = await fetch('/original-data');
     const textContent = await response.text();
-    
+
     regions = parseMemoryData(textContent);
+    updatePageTitles();
     updateCanvas(zoomState);
 }
 
@@ -631,8 +1003,8 @@ function updateMobileScaleInfo() {
         </div>
         <div style="margin-bottom: 10px;">
             <strong>Scale:</strong><br>
-            Each pixel = ${formatBytes(bytesPerPixel)}<br>
-            Each square = ${formatBytes(bytesPerSquare)}
+            ${currentFormat.formatPixelLabel(bytesPerPixel)}<br>
+            ${currentFormat.formatSquareLabel(bytesPerSquare)}
         </div>
     `;
     
@@ -642,7 +1014,7 @@ function updateMobileScaleInfo() {
             <div>
                 <strong>Zoom:</strong><br>
                 Level ${zoomState.level}<br>
-                View = ${formatBytes(currentRange)}
+                ${currentFormat.formatZoomedViewLabelMobile(currentRange)}
             </div>
         `;
     } else {
@@ -832,22 +1204,13 @@ function drawScaleKey(ctx, level, bytesPerPixel, minAddr, maxAddr) {
     ctx.font = '16px Arial';
 
     // Memory range above Scale
-    ctx.fillText(`0x${minAddr.toString(16)} - 0x${maxAddr.toString(16)}`, keyX, keyY - 20);
+    ctx.fillText(currentFormat.formatRangeLabel(minAddr, maxAddr), keyX, keyY - 20);
 
     // Title
     ctx.fillText('Scale:', keyX, keyY);
 
-    // Show useful sizes starting from 4KiB
-    const sizes = [
-        { bytes: 4 * 1024, name: '4 KiB' },
-        { bytes: 64 * 1024, name: '64 KiB' },
-        { bytes: 1024 * 1024, name: '1 MiB' },
-        { bytes: 64 * 1024 * 1024, name: '64 MiB' },
-        { bytes: 1024 * 1024 * 1024, name: '1 GiB' },
-        { bytes: 64 * 1024 * 1024 * 1024, name: '64 GiB' },
-        { bytes: 1024 * 1024 * 1024 * 1024, name: '1 TiB' },
-        { bytes: 64 * 1024 * 1024 * 1024 * 1024, name: '64 TiB' }
-    ];
+    // Get format-specific size labels
+    const sizes = currentFormat.getSizeKeyLabels();
 
     let yOffset = 30;
     ctx.font = '14px Arial';
@@ -856,7 +1219,7 @@ function drawScaleKey(ctx, level, bytesPerPixel, minAddr, maxAddr) {
         const pixels = size.bytes / bytesPerPixel;
         const squareSize = Math.sqrt(pixels);
 
-        if (squareSize >= 1 && squareSize <= 256) {
+        if (squareSize >= 4 && pixels <= 16384) {
             ctx.fillStyle = '#808080';
             ctx.fillRect(keyX, keyY + yOffset, squareSize, squareSize);
             ctx.fillStyle = '#000000';
@@ -873,12 +1236,12 @@ function drawScaleKey(ctx, level, bytesPerPixel, minAddr, maxAddr) {
     const squareSize = 128;
     const bytesPerSquare = bytesPerPixel * squareSize * squareSize;
 
-    ctx.fillText(`Each pixel = ${formatBytes(bytesPerPixel)}`, keyX, keyY + yOffset + 20);
-    ctx.fillText(`Each square = ${formatBytes(bytesPerSquare)}`, keyX, keyY + yOffset + 40);
+    ctx.fillText(currentFormat.formatPixelLabel(bytesPerPixel), keyX, keyY + yOffset + 20);
+    ctx.fillText(currentFormat.formatSquareLabel(bytesPerSquare), keyX, keyY + yOffset + 40);
 
     if (level > 0) {
         const currentRange = maxAddr - minAddr;
-        ctx.fillText(`Zoomed view = ${formatBytes(currentRange)}`, keyX, keyY + yOffset + 60);
+        ctx.fillText(currentFormat.formatZoomedViewLabel(currentRange), keyX, keyY + yOffset + 60);
         ctx.fillText(`Zoom level: ${level}`, keyX, keyY + yOffset + 80);
     } else {
         ctx.fillText(`Zoom level: ${level}`, keyX, keyY + yOffset + 60);
@@ -910,19 +1273,13 @@ function showTooltipForCoords(coords, clientX, clientY) {
 
 function showTooltipForRegion(region, clientX, clientY) {
     const tooltip = document.getElementById('tooltip');
-    
-    const size = region.end - region.start;
-    const sizeHex = '0x' + size.toString(16);
-    const sizeApprox = formatBytes(size);
-    
-    const startAlignment = getAlignment(region.start);
-    const endAlignment = getAlignment(region.end);
-    const startAlignmentStr = formatBytes(startAlignment);
-    const endAlignmentStr = formatBytes(endAlignment);
-    
+
     // Find current region index
     const currentIndex = regions.indexOf(region);
-    
+
+    // Use format strategy to generate tooltip content
+    const tooltipContent = currentFormat.formatTooltip(region);
+
     tooltip.innerHTML = `
         <span class="tooltip-close" onclick="hideTooltip()">&times;</span>
         <div style="display: flex; align-items: center; margin-bottom: 5px;">
@@ -931,10 +1288,7 @@ function showTooltipForRegion(region, clientX, clientY) {
             <button class="tooltip-nav" onclick="showNextRegion()" style="margin-left: 10px;">&#9654;</button>
         </div>
         <div class="tooltip-content">
-            <div class="tooltip-address">0x${region.start.toString(16)} - 0x${region.end.toString(16)}</div>
-            <div class="tooltip-size">Size: ${sizeHex} (ca. ${sizeApprox})</div>
-            <div class="tooltip-alignment-start">Start alignment: ${startAlignmentStr}</div>
-            <div class="tooltip-alignment-end">End alignment: ${endAlignmentStr}</div>
+            ${tooltipContent}
         </div>
     `;
     
@@ -999,29 +1353,17 @@ function showNextRegion() {
 
 function updateTooltipContent(region, regionIndex) {
     const tooltip = document.getElementById('tooltip');
-    
-    const size = region.end - region.start;
-    const sizeHex = '0x' + size.toString(16);
-    const sizeApprox = formatBytes(size);
-    
-    const startAlignment = getAlignment(region.start);
-    const endAlignment = getAlignment(region.end);
-    const startAlignmentStr = formatBytes(startAlignment);
-    const endAlignmentStr = formatBytes(endAlignment);
-    
+
+    // Use format strategy to generate tooltip content
+    const tooltipContent = currentFormat.formatTooltip(region);
+
     // Update only the content elements, not the buttons
     const regionNameEl = tooltip.querySelector('.tooltip-region-name');
-    const addressEl = tooltip.querySelector('.tooltip-address');
-    const sizeEl = tooltip.querySelector('.tooltip-size');
-    const startAlignmentEl = tooltip.querySelector('.tooltip-alignment-start');
-    const endAlignmentEl = tooltip.querySelector('.tooltip-alignment-end');
-    
+    const contentEl = tooltip.querySelector('.tooltip-content');
+
     if (regionNameEl) regionNameEl.textContent = region.name;
-    if (addressEl) addressEl.textContent = `0x${region.start.toString(16)} - 0x${region.end.toString(16)}`;
-    if (sizeEl) sizeEl.textContent = `Size: ${sizeHex} (ca. ${sizeApprox})`;
-    if (startAlignmentEl) startAlignmentEl.textContent = `Start alignment: ${startAlignmentStr}`;
-    if (endAlignmentEl) endAlignmentEl.textContent = `End alignment: ${endAlignmentStr}`;
-    
+    if (contentEl) contentEl.innerHTML = tooltipContent;
+
     // Update stored region index
     currentTooltipRegion = regionIndex;
     
@@ -1032,7 +1374,7 @@ function updateTooltipContent(region, regionIndex) {
 
 function maybePerformZoom(coords) {
     // Check zoom level and bounds
-    if (zoomState.level >= MAP.MAX_ZOOM) {
+    if (zoomState.level >= currentFormat.getMaxZoomLevel()) {
         return;
     }
     
