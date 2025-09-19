@@ -455,9 +455,69 @@ function setStatus(message, isError = false) {
     }, 3000);
 }
 
+async function loadSelectedSample() {
+    const select = document.getElementById('sampleSelect');
+    const filename = select.value;
+
+    if (!filename) {
+        return false;
+    }
+
+    try {
+        const response = await fetch(`/data/${filename}`);
+        const text = await response.text();
+        const lineCount = (text.match(/\n/g) || []).length + 1;
+        const fileSizeMB = (text.length / (1024 * 1024)).toFixed(2);
+
+        // Store full content for processing
+        fullFileContent = text;
+        isContentTruncated = false;
+
+        const displayName = select.options[select.selectedIndex].text;
+
+        // If file is large, truncate display but keep full content for parsing
+        if (lineCount > 10000) {
+            const lines = text.split('\n');
+            const truncatedContent = lines.slice(0, 1000).join('\n') +
+                `\n\n... [${lineCount - 1000} more lines truncated for display performance]\n` +
+                `[Full content will be used when applying changes]`;
+
+            document.getElementById('textEditor').value = truncatedContent;
+            isContentTruncated = true;
+            document.getElementById('toggleFullContent').style.display = 'inline-block';
+            setStatus(`${displayName} loaded (${fileSizeMB} MB, ${lineCount} lines) - Display truncated for performance`);
+        } else {
+            document.getElementById('textEditor').value = text;
+            document.getElementById('toggleFullContent').style.display = 'none';
+            setStatus(`${displayName} loaded (${fileSizeMB} MB, ${lineCount} lines)`);
+        }
+
+        originalTextContent = text;
+
+        // Reset select to default after loading
+        select.value = '';
+
+        // Update URL parameter to reflect loaded file
+        const url = new URL(window.location);
+        url.searchParams.set('file', filename);
+        window.history.pushState(null, '', url.toString());
+
+        // Auto-apply changes after loading file
+        setTimeout(() => {
+            applyChanges();
+        }, 100); // Small delay to ensure UI updates complete
+
+        return true;
+    } catch (error) {
+        setStatus('Error loading sample file', true);
+        return false;
+    }
+}
+
+// Keep the old function for backward compatibility and initial load
 async function loadSampleFile() {
     try {
-        const response = await fetch('original-data.txt');
+        const response = await fetch('/data/original-data.txt');
         const text = await response.text();
         document.getElementById('textEditor').value = text;
         originalTextContent = text;
@@ -739,6 +799,11 @@ function handleFileUpload(event) {
             document.getElementById('toggleFullContent').style.display = 'none';
             setStatus(`Loaded file: ${file.name} (${fileSizeMB} MB, ${lineCount} lines)`);
         }
+
+        // Clear URL file parameter since user uploaded their own file
+        const url = new URL(window.location);
+        url.searchParams.delete('file');
+        window.history.pushState(null, '', url.toString());
 
         // Auto-apply changes after loading file
         setTimeout(() => {
@@ -1882,14 +1947,27 @@ document.addEventListener('DOMContentLoaded', async function() {
     const backgroundCanvas = document.getElementById('backgroundCanvas');
     container.insertBefore(memoryCanvas, backgroundCanvas.nextSibling);
     
-    // Try to load sample file first
-    const sampleLoaded = await loadSampleFile();
+    // Check URL for file parameter
+    const urlParams = new URLSearchParams(window.location.search);
+    const fileParam = urlParams.get('file');
+    let sampleLoaded = false;
+
+    // Try to load file specified in URL parameter, otherwise stay on text editor
+    if (fileParam) {
+        // Set the dropdown value and trigger loading
+        const select = document.getElementById('sampleSelect');
+        select.value = fileParam;
+        sampleLoaded = await loadSelectedSample();
+    } else {
+        // No file parameter - user should choose what to load
+        sampleLoaded = false;
+    }
     
     if (sampleLoaded) {
         // If sample file loaded successfully, apply changes and switch to map
         await applyChanges();
         switchTab('map');
-        
+
         // Check if URL contains zoom state to restore
         const urlStateRestored = parseURLState();
         if (urlStateRestored) {
@@ -1897,7 +1975,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             updateCanvas(memoryCanvas);
         }
     } else {
-        // If sample file failed to load, stay on text editor
+        // If no file parameter or file failed to load, stay on text editor
         switchTab('editor');
     }
 

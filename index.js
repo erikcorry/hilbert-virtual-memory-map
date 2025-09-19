@@ -18,7 +18,7 @@ const fs = require('fs');
 const http = require('http');
 const url = require('url');
 
-function startServer(inputFile, port = 8080) {
+function startServer(port = 8080) {
     const server = http.createServer((req, res) => {
       const parsedUrl = url.parse(req.url, true);
 
@@ -62,15 +62,28 @@ function startServer(inputFile, port = 8080) {
           res.writeHead(404, { 'Content-Type': 'text/plain' });
           res.end('Favicon not found');
         }
-      } else if (parsedUrl.pathname === '/original-data.txt') {
-        // Serve original input file content for text editor.
+      } else if (parsedUrl.pathname.startsWith('/data/')) {
+        // Serve data files - validate filename with strict pattern matching
+        const requestedFile = parsedUrl.pathname.substring(6); // Remove '/data/' prefix
+
+        // Only allow safe filename patterns: letters, numbers, hyphens, underscores, and a single dot for extension
+        const safeFilenamePattern = /^[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+$/;
+
+        if (!safeFilenamePattern.test(requestedFile)) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' });
+          res.end('Invalid filename format');
+          return;
+        }
+
+        const sanitizedFilename = requestedFile; // Already validated as safe
+
         try {
-          const textContent = fs.readFileSync(inputFile, 'utf8');
+          const textContent = fs.readFileSync(`data/${sanitizedFilename}`, 'utf8');
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end(textContent);
         } catch (error) {
-          res.writeHead(500, { 'Content-Type': 'text/plain' });
-          res.end('Error loading original data: ' + error.message);
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('File not found: ' + sanitizedFilename);
         }
       } else {
         // 404 for other paths.
@@ -81,6 +94,9 @@ function startServer(inputFile, port = 8080) {
 
     server.listen(port, () => {
       console.log(`Memory map server running at http://localhost:${port}/`);
+      console.log(`\nTry these visualizations:`);
+      console.log(`🎮 Chrome Memory Map:    http://localhost:${port}/?file=original-data.txt`);
+      console.log(`🌍 IPv4 GeoIP Data:     http://localhost:${port}/?file=geoip2-ipv4.csv`);
     });
 
     return server;
@@ -91,49 +107,38 @@ function showHelp() {
   console.log(`
 Hilbert Curve Memory Map Generator
 
-Usage: node index.js <input-file> [port]
+Usage: node index.js [port]
 
 Arguments:
-  input-file   Text file containing memory ranges with region names
   port         HTTP server port (default: 8080)
 
-Input format (one range per line):
-  startAddr endAddr regionName
-
-Example:
-  0x7f0000000000 0x7f0000001000 heap
-  0x400000 0x500000 text
-  400000 500000 text
-
-Where:
-- startAddr, endAddr are hex addresses (inclusive start, exclusive end)
-- regionName is any descriptive name (spaces allowed)
-
 Features:
-- Maps 48-bit virtual address space (256 TiB)
-- 1024x1024 pixel output (256 MiB per pixel)
-- Uses Hilbert curve for space-filling mapping
-- Adjacent addresses remain visually adjacent
+- Maps 48-bit virtual address space (256 TiB) or 32-bit IPv4 space
+- 1024x1024 pixel output using Hilbert curve mapping
+- Supports multiple input formats:
+  * Memory ranges: startAddr endAddr regionName
+  * /proc/pid/maps format
+  * IPv4 GeoIP CSV format
+
+Examples:
+  node index.js         # Start server on port 8080
+  node index.js 3000    # Start server on port 3000
+
+After starting, visit the suggested URLs to try different visualizations.
   `);
 }
 
 function main() {
   const args = process.argv.slice(2);
 
-  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+  if (args.length > 0 && (args[0] === '--help' || args[0] === '-h')) {
     showHelp();
     return;
   }
 
-  const inputFile = args[0];
-  const port = parseInt(args[1]) || 8080;
+  const port = parseInt(args[0]) || 8080;
 
-  if (!fs.existsSync(inputFile)) {
-    console.error(`Error: Input file '${inputFile}' does not exist`);
-    process.exit(1);
-  }
-
-  startServer(inputFile, port);
+  startServer(port);
 }
 
 if (require.main === module) {
