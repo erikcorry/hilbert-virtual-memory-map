@@ -18,50 +18,37 @@ const fs = require('fs');
 const http = require('http');
 const url = require('url');
 
+function serveFile(res, filepath, contentType, encoding = 'utf8', notFoundStatus = 500) {
+    try {
+        const content = fs.readFileSync(filepath, encoding);
+        res.writeHead(200, { 'Content-Type': contentType });
+        res.end(content);
+    } catch (error) {
+        const status = notFoundStatus === 404 ? 404 : 500;
+        const message = notFoundStatus === 404 ?
+            `${filepath.split('/').pop()} not found` :
+            `Error loading ${filepath.split('/').pop()}: ${error.message}`;
+        res.writeHead(status, { 'Content-Type': 'text/plain' });
+        res.end(message);
+    }
+}
+
 function startServer(port = 8080) {
     const server = http.createServer((req, res) => {
       const parsedUrl = url.parse(req.url, true);
 
       if (parsedUrl.pathname === '/') {
         // Serve HTML page from file.
-        try {
-          const htmlContent = fs.readFileSync('index.html', 'utf8');
-          res.writeHead(200, { 'Content-Type': 'text/html' });
-          res.end(htmlContent);
-        } catch (error) {
-          res.writeHead(500, { 'Content-Type': 'text/plain' });
-          res.end('Error loading HTML file: ' + error.message);
-        }
+        serveFile(res, 'index.html', 'text/html');
       } else if (parsedUrl.pathname === '/client.js') {
         // Serve client-side JavaScript.
-        try {
-          const jsContent = fs.readFileSync('client.js', 'utf8');
-          res.writeHead(200, { 'Content-Type': 'application/javascript' });
-          res.end(jsContent);
-        } catch (error) {
-          res.writeHead(500, { 'Content-Type': 'text/plain' });
-          res.end('Error loading client script: ' + error.message);
-        }
+        serveFile(res, 'client.js', 'application/javascript');
       } else if (parsedUrl.pathname === '/styles.css') {
         // Serve CSS stylesheet.
-        try {
-          const cssContent = fs.readFileSync('styles.css', 'utf8');
-          res.writeHead(200, { 'Content-Type': 'text/css' });
-          res.end(cssContent);
-        } catch (error) {
-          res.writeHead(500, { 'Content-Type': 'text/plain' });
-          res.end('Error loading stylesheet: ' + error.message);
-        }
+        serveFile(res, 'styles.css', 'text/css');
       } else if (parsedUrl.pathname === '/favicon.ico') {
         // Serve favicon (actually a PNG file).
-        try {
-          const faviconContent = fs.readFileSync('favicon.ico');
-          res.writeHead(200, { 'Content-Type': 'image/png' });
-          res.end(faviconContent);
-        } catch (error) {
-          res.writeHead(404, { 'Content-Type': 'text/plain' });
-          res.end('Favicon not found');
-        }
+        serveFile(res, 'favicon.ico', 'image/png', null, 404);
       } else if (parsedUrl.pathname.startsWith('/data/')) {
         // Serve data files - validate filename with strict pattern matching
         const requestedFile = parsedUrl.pathname.substring(6); // Remove '/data/' prefix
@@ -77,14 +64,7 @@ function startServer(port = 8080) {
 
         const sanitizedFilename = requestedFile; // Already validated as safe
 
-        try {
-          const textContent = fs.readFileSync(`data/${sanitizedFilename}`, 'utf8');
-          res.writeHead(200, { 'Content-Type': 'text/plain' });
-          res.end(textContent);
-        } catch (error) {
-          res.writeHead(404, { 'Content-Type': 'text/plain' });
-          res.end('File not found: ' + sanitizedFilename);
-        }
+        serveFile(res, `data/${sanitizedFilename}`, 'text/plain', 'utf8', 404);
       } else {
         // 404 for other paths.
         res.writeHead(404, { 'Content-Type': 'text/plain' });
