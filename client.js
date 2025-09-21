@@ -464,7 +464,7 @@ async function loadSelectedSample() {
     }
 
     try {
-        const response = await fetch(`/data/${filename}`);
+        const response = await fetch(`${filename}`);
         const text = await response.text();
         const lineCount = (text.match(/\n/g) || []).length + 1;
         const fileSizeMB = (text.length / (1024 * 1024)).toFixed(2);
@@ -517,7 +517,7 @@ async function loadSelectedSample() {
 // Keep the old function for backward compatibility and initial load
 async function loadSampleFile() {
     try {
-        const response = await fetch('/data/original-data.txt');
+        const response = await fetch('chrome-maps.txt');
         const text = await response.text();
         document.getElementById('textEditor').value = text;
         originalTextContent = text;
@@ -868,7 +868,7 @@ async function applyChanges() {
 }
 
 async function loadMemoryMap() {
-    const response = await fetch('/original-data');
+    const response = await fetch('/chrome-maps.txt');
     const textContent = await response.text();
 
     regions = parseMemoryData(textContent);

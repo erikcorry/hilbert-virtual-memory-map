@@ -37,6 +37,10 @@ function startServer(port = 8080) {
     const server = http.createServer((req, res) => {
       const parsedUrl = url.parse(req.url, true);
 
+      // Only allow safe filename patterns: letters, numbers, hyphens,
+      // underscores, and a single dot for extension
+      const safeFilenamePattern = /^\/[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+$/;
+
       if (parsedUrl.pathname === '/') {
         // Serve HTML page from file.
         serveFile(res, 'index.html', 'text/html');
@@ -49,33 +53,22 @@ function startServer(port = 8080) {
       } else if (parsedUrl.pathname === '/favicon.ico') {
         // Serve favicon (actually a PNG file).
         serveFile(res, 'favicon.ico', 'image/png', null, 404);
-      } else if (parsedUrl.pathname.startsWith('/data/')) {
+      } else if (safeFilenamePattern.test(parsedUrl.pathname)) {
         // Serve data files - validate filename with strict pattern matching
-        const requestedFile = parsedUrl.pathname.substring(6); // Remove '/data/' prefix
+        const requestedFile = parsedUrl.pathname.substring(1); // Remove initial slash.
 
-        // Only allow safe filename patterns: letters, numbers, hyphens, underscores, and a single dot for extension
-        const safeFilenamePattern = /^[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+$/;
-
-        if (!safeFilenamePattern.test(requestedFile)) {
-          res.writeHead(400, { 'Content-Type': 'text/plain' });
-          res.end('Invalid filename format');
-          return;
-        }
-
-        const sanitizedFilename = requestedFile; // Already validated as safe
-
-        serveFile(res, `data/${sanitizedFilename}`, 'text/plain', 'utf8', 404);
+        serveFile(res, `${requestedFile}`, 'text/plain', 'utf8', 404);
       } else {
         // 404 for other paths.
         res.writeHead(404, { 'Content-Type': 'text/plain' });
-        res.end('Not Found');
+        res.end('Not Found "' + parsedUrl.pathname + '"');
       }
     });
 
     server.listen(port, () => {
       console.log(`Memory map server running at http://localhost:${port}/`);
       console.log(`\nTry these visualizations:`);
-      console.log(`🎮 Chrome Memory Map:    http://localhost:${port}/?file=original-data.txt`);
+      console.log(`🎮 Chrome Memory Map:    http://localhost:${port}/?file=chrome-maps.txt`);
       console.log(`🌍 IPv4 GeoIP Data:     http://localhost:${port}/?file=geoip2-ipv4.csv`);
     });
 
