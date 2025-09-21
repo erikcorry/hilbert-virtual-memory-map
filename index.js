@@ -33,7 +33,7 @@ function serveFile(res, filepath, contentType, encoding = 'utf8', notFoundStatus
     }
 }
 
-function startServer(port = 8080) {
+function startServer(port = 8080, commandLineFile = null) {
     const server = http.createServer((req, res) => {
       const parsedUrl = url.parse(req.url, true);
 
@@ -53,6 +53,9 @@ function startServer(port = 8080) {
       } else if (parsedUrl.pathname === '/favicon.ico') {
         // Serve favicon (actually a PNG file).
         serveFile(res, 'favicon.ico', 'image/png', null, 404);
+      } else if (parsedUrl.pathname === '/default.txt' && commandLineFile) {
+        // Serve command line file when default.txt is requested
+        serveFile(res, commandLineFile, 'text/plain', 'utf8', 404);
       } else if (safeFilenamePattern.test(parsedUrl.pathname)) {
         // Serve data files - validate filename with strict pattern matching
         const requestedFile = parsedUrl.pathname.substring(1); // Remove initial slash.
@@ -68,8 +71,12 @@ function startServer(port = 8080) {
     server.listen(port, () => {
       console.log(`Memory map server running at http://localhost:${port}/`);
       console.log(`\nTry these visualizations:`);
-      console.log(`🎮 Chrome Memory Map:    http://localhost:${port}/?file=chrome-maps.txt`);
-      console.log(`🌍 IPv4 GeoIP Data:     http://localhost:${port}/?file=geoip2-ipv4.csv`);
+      if (commandLineFile) {
+        console.log(`📁 Command Line File:   http://localhost:${port}/?file=default.txt`);
+      } else {
+        console.log(`🎮 Chrome Memory Map:    http://localhost:${port}/?file=chrome-maps.txt`);
+        console.log(`🌍 IPv4 GeoIP Data:     http://localhost:${port}/?file=geoip2-ipv4.csv`);
+      }
     });
 
     return server;
@@ -80,9 +87,10 @@ function showHelp() {
   console.log(`
 Hilbert Curve Memory Map Generator
 
-Usage: node index.js [port]
+Usage: node index.js [filename] [port]
 
 Arguments:
+  filename     File to map (optional)
   port         HTTP server port (default: 8080)
 
 Features:
@@ -94,8 +102,11 @@ Features:
   * IPv4 GeoIP CSV format
 
 Examples:
-  node index.js         # Start server on port 8080
-  node index.js 3000    # Start server on port 3000
+  node index.js                    # Start server on port 8080
+  node index.js /proc/123/maps     # Map specific file on port 8080
+  node index.js chrome-maps.txt    # Map chrome-maps.txt on port 8080
+  node index.js 3000               # Start server on port 3000
+  node index.js /proc/123/maps 3000 # Map file on port 3000
 
 After starting, visit the suggested URLs to try different visualizations.
   `);
@@ -109,9 +120,28 @@ function main() {
     return;
   }
 
-  const port = parseInt(args[0]) || 8080;
+  let filename = null;
+  let port = 8080;
 
-  startServer(port);
+  // Parse arguments - could be filename, port, or both
+  if (args.length === 1) {
+    // Single argument - could be filename or port
+    const arg = args[0];
+    const parsedPort = parseInt(arg);
+    if (isNaN(parsedPort)) {
+      // Not a number, treat as filename
+      filename = arg;
+    } else {
+      // Is a number, treat as port
+      port = parsedPort;
+    }
+  } else if (args.length === 2) {
+    // Two arguments - filename and port
+    filename = args[0];
+    port = parseInt(args[1]) || 8080;
+  }
+
+  startServer(port, filename);
 }
 
 if (require.main === module) {

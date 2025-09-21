@@ -16,8 +16,9 @@
                 <div class="editor-toolbar">
                     <select id="sampleSelect" onchange="loadSelectedSample()">
                         <option value="">Load Sample...</option>
-                        <option value="original-data.txt">Memory Map Sample</option>
+                        <option value="chrome-maps.txt">Memory Map Sample</option>
                         <option value="geoip2-ipv4.csv">IPv4 GeoIP Sample</option>
+                        <option value="default.txt">Cmdline file</option>
                     </select>
                     <input type="file" id="fileInput" style="display: none;" onchange="handleFileUpload(event)">
                     <button onclick="document.getElementById('fileInput').click()">Upload File</button>

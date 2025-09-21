@@ -463,6 +463,22 @@ async function loadSelectedSample() {
         return false;
     }
 
+    const displayName = select.options[select.selectedIndex].text;
+    const success = await loadFileByName(filename, displayName);
+
+    // Reset select to default after loading
+    if (success) {
+        select.value = '';
+    }
+
+    return success;
+}
+
+async function loadFileByName(filename, displayName = null) {
+    if (!filename) {
+        return false;
+    }
+
     try {
         const response = await fetch(`${filename}`);
         const text = await response.text();
@@ -473,7 +489,7 @@ async function loadSelectedSample() {
         fullFileContent = text;
         isContentTruncated = false;
 
-        const displayName = select.options[select.selectedIndex].text;
+        const finalDisplayName = displayName || filename;
 
         // If file is large, truncate display but keep full content for parsing
         if (lineCount > 10000) {
@@ -485,17 +501,14 @@ async function loadSelectedSample() {
             document.getElementById('textEditor').value = truncatedContent;
             isContentTruncated = true;
             document.getElementById('toggleFullContent').style.display = 'inline-block';
-            setStatus(`${displayName} loaded (${fileSizeMB} MB, ${lineCount} lines) - Display truncated for performance`);
+            setStatus(`${finalDisplayName} loaded (${fileSizeMB} MB, ${lineCount} lines) - Display truncated for performance`);
         } else {
             document.getElementById('textEditor').value = text;
             document.getElementById('toggleFullContent').style.display = 'none';
-            setStatus(`${displayName} loaded (${fileSizeMB} MB, ${lineCount} lines)`);
+            setStatus(`${finalDisplayName} loaded (${fileSizeMB} MB, ${lineCount} lines)`);
         }
 
         originalTextContent = text;
-
-        // Reset select to default after loading
-        select.value = '';
 
         // Update URL parameter to reflect loaded file
         const url = new URL(window.location);
@@ -505,6 +518,8 @@ async function loadSelectedSample() {
         // Auto-apply changes after loading file
         setTimeout(() => {
             applyChanges();
+            // Reset zoom when new file is loaded
+            resetZoom();
         }, 100); // Small delay to ensure UI updates complete
 
         return true;
@@ -808,6 +823,8 @@ function handleFileUpload(event) {
         // Auto-apply changes after loading file
         setTimeout(() => {
             applyChanges();
+            // Reset zoom when new file is loaded
+            resetZoom();
         }, 100); // Small delay to ensure UI updates complete
     };
     reader.onerror = function() {
@@ -1954,10 +1971,18 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // Try to load file specified in URL parameter, otherwise stay on text editor
     if (fileParam) {
-        // Set the dropdown value and trigger loading
+        // Try to load from dropdown first, otherwise load directly by name
         const select = document.getElementById('sampleSelect');
-        select.value = fileParam;
-        sampleLoaded = await loadSelectedSample();
+        const optionExists = Array.from(select.options).some(option => option.value === fileParam);
+
+        if (optionExists) {
+            // File exists in dropdown, use the existing function
+            select.value = fileParam;
+            sampleLoaded = await loadSelectedSample();
+        } else {
+            // File not in dropdown, load directly by name
+            sampleLoaded = await loadFileByName(fileParam);
+        }
     } else {
         // No file parameter - user should choose what to load
         sampleLoaded = false;

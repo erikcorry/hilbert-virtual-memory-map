@@ -5,7 +5,7 @@ zoomable canvas in your browser.
 
 ## Demo
 
-🎮 **[Try the live demo - Chrome Memory Map](https://erikcorry.github.io/hilbert-virtual-memory-map/)** - Features an interactive Chrome browser memory map with smooth zoom animations
+🎮 **[Try the live demo - Chrome Memory Map](https://erikcorry.github.io/hilbert-virtual-memory-map/?file=chrome-maps.txt)** - Features an interactive Chrome browser memory map with smooth zoom animations
 
 🌍 **[Try the live demo - IPv4 GeoIP Visualization](https://erikcorry.github.io/hilbert-virtual-memory-map/?file=geoip2-ipv4.csv)** - Interactive visualization of IPv4 address space with geolocation data
 
@@ -15,12 +15,12 @@ The Hilbert curve is used to map addresses to pixels, so that any consecutive ar
 
 Understands its own format, but can also read the format of /proc/pid/maps.
 
-For example, use 'top' to find an active Chrome process then start the server on
-localhost:8080 with:
+For example, use 'top' to find an active Chrome process then start the server:
 
 ```
 make setup
-node index.js /proc/123/maps
+node index.js /proc/123/maps         # Start on default port 8080
+node index.js /proc/123/maps 3000    # Start on port 3000
 ```
 
 ## IPv4 Geolocation Support
@@ -28,7 +28,8 @@ node index.js /proc/123/maps
 The tool also supports IPv4 geolocation databases in CSV format. For example:
 
 ```
-node index.js geoip2-ipv4.csv
+node index.js geoip2-ipv4.csv        # Start on default port 8080
+node index.js geoip2-ipv4.csv 8090   # Start on port 8090
 ```
 
 The geo IP data used in testing comes from https://github.com/datasets/geoip2-ipv4
